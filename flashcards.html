@@ -1,0 +1,1068 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Flashcards — Remaining / Seen / Mastered / Random</title>
+  <style>
+    :root {
+      --bg: #0e1222;
+      --panel: #161b2e;
+      --text: #f4f6fb;
+      --muted: #c5cbe0;
+      --accent: #005eb8;
+      --accent-2: #0072ce;
+      --good: #2dbf6e;
+      --warn: #f1c40f;
+      --bad: #e74c3c;
+      --shadow: 0 10px 30px rgba(0,0,0,.35);
+      --safe-bottom: env(safe-area-inset-bottom);
+      --safe-right: env(safe-area-inset-right);
+    }
+    html, body { height: 100%; }
+    body {
+      margin: 0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: linear-gradient(180deg, #0b1330 0%, #0e1222 60%);
+      color: var(--text);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    /* Top bar and controls */
+    .topbar {
+      position: fixed; inset: 0 0 auto 0;
+      display: grid;
+      grid-template-columns: auto auto 1fr auto;
+      gap: 12px; align-items: center;
+      padding: 8px 12px;
+      padding-right: calc(12px + var(--safe-right));
+      background: rgba(7,10,24,.65);
+      backdrop-filter: blur(8px);
+      z-index: 12;
+    }
+    .drawer-toggle {
+      background: transparent;
+      border: none;
+      color: var(--text);
+      font-size: 24px;
+      cursor: pointer;
+      width: 32px;
+      height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .drawer-toggle:hover { color: var(--accent); }
+    .left-actions { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
+    .left-actions button { background:#fff; color:#000; border:none; border-radius:10px; padding:6px 10px; cursor:pointer; font-size:14px; white-space:nowrap; }
+
+    .views { display:flex; gap:6px; background: rgba(255,255,255,.06); padding:4px; border-radius: 999px; border:1px solid rgba(255,255,255,.12); }
+    .views button { background: transparent; color: var(--muted); border:none; cursor:pointer; padding:6px 10px; border-radius:999px; font-weight:700; font-size: 13px; }
+    .views button.active { background: var(--accent); color:#fff; }
+
+    /* Counter pill (top-right), compact & non-clipping */
+    .counter {
+      justify-self: end; display:flex; align-items:center; gap:6px;
+      color: var(--text);
+      background: rgba(255,255,255,.08);
+      border: 1px solid rgba(255,255,255,.18);
+      border-radius: 999px;
+      padding: 4px 8px;
+      white-space: nowrap;
+      max-width: 44vw;
+      overflow: visible;
+    }
+    .counter input{
+      flex: 0 1 48px;
+      width: 48px; text-align:center;
+      background: transparent; border:1px solid #4a5276;
+      border-radius: 8px; color: var(--text); padding:2px 4px;
+      font-weight: 700;
+    }
+    .counter input::-webkit-outer-spin-button,
+    .counter input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+    .counter .slash { opacity:.8; }
+    .counter .total { min-width: 1ch; color: var(--muted); font-weight:700; }
+
+    #overflowBtn { display:none; background:#fff; color:#000; border:none; border-radius:10px; padding:6px 10px; cursor:pointer; font-size:16px; }
+    #overflowMenu { position: absolute; right: 8px; top: 48px; background:#fff; color:#111; border-radius:10px; box-shadow: var(--shadow); display:none; flex-direction:column; min-width: 200px; z-index: 50; }
+    #overflowMenu button { background:transparent; border:none; text-align:left; padding:10px 12px; cursor:pointer; }
+    #overflowMenu button:hover { background:#f0f4ff; }
+
+    @media (max-width: 720px){
+      .left-actions { display:none; }
+      #overflowBtn { display:inline-block; }
+      .topbar { grid-template-columns: auto 1fr auto; }
+      .topbar .views { justify-self: center; }
+      .counter { max-width: 50vw; }
+      .counter input{ flex-basis:44px; width:44px; }
+    }
+    @media (max-width: 380px){
+      .counter{ font-size: 12px; }
+      .counter input{ flex-basis:40px; width:40px; }
+    }
+
+    /* Filter bar for keyword search */
+    .filter-bar {
+      position: fixed; left:0; right:0; top:64px; /* below topbar */
+      display:flex; align-items:center; gap:10px;
+      padding: 8px 12px;
+      background: rgba(7,10,24,.65);
+      backdrop-filter: blur(8px);
+      z-index: 11;
+    }
+    .filter-bar input[type="text"] {
+      flex:1; min-width:0;
+      padding:6px 8px;
+      border-radius:8px;
+      border:1px solid #4a5276;
+      background: var(--panel);
+      color: var(--text);
+    }
+    .filter-bar label {
+      display:flex; align-items:center; gap:4px;
+      font-size:14px;
+    }
+    .filter-bar input[type="checkbox"] { width:16px; height:16px; }
+
+    /* Wrapper and flashcard */
+    .wrap { margin: 128px auto 0; width: min(92vw, 760px); padding-bottom: 160px; }
+    .flashcard { position: relative; width: 100%; aspect-ratio: 4 / 3; color: #101321; border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; perspective: 1000px; }
+    @media (max-width: 640px){ .wrap { margin-top: 136px; } .flashcard{ aspect-ratio: 3 / 4; } }
+    .card-inner { position:absolute; inset:0; transition: transform .5s; transform-style: preserve-3d; }
+    .card-inner.flipped { transform: rotateY(180deg); }
+    .panel { position:absolute; inset:0; padding: clamp(14px, 3vw, 28px); display:flex; align-items:center; justify-content:center; flex-direction:column; backface-visibility:hidden; overflow:auto; }
+    .front { /* background will be set via JS */ }
+    .back  { transform: rotateY(180deg); /* background set via JS */ }
+    .panel strong { font-size: clamp(18px, 2.1vw, 28px); }
+    .panel img { max-width: 90%; max-height: 90%; object-fit: contain; }
+
+    .show { display:block; margin: 14px auto 10px; padding: 12px 22px; font-size: 16px; font-weight: 800; border:none; border-radius: 999px; background: var(--accent-2); color:#fff; cursor:pointer; box-shadow: 0 6px 18px rgba(0,0,0,.25); user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
+    #showBtn:focus { outline: none; }
+
+    .lock-pill { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(92px + var(--safe-bottom)); background:#222; color:#fff; border:1px solid #444; border-radius: 999px; padding:8px 12px; font-weight:700; cursor:pointer; z-index: 9; display:none; }
+
+    .arrow { position: fixed; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; color:#fff; background: rgba(0,0,0,.32); box-shadow: 0 4px 16px rgba(0,0,0,.25); z-index: 5; user-select:none; -webkit-user-select:none; }
+    .arrow.left  { left: 8px; }
+    .arrow.right { right: 8px; }
+    @media (max-width: 480px){ .arrow{ width:34px; height:34px; } }
+
+    .bottombar { position: fixed; left: 0; right: 0; bottom: 0; display:flex; gap:10px; justify-content:center; align-items:center; padding: 12px 12px calc(12px + var(--safe-bottom)); background: rgba(7,10,24,.65); backdrop-filter: blur(8px); z-index: 8; }
+    .bottombar button { border:none; border-radius:12px; padding:10px 14px; font-weight:800; cursor:pointer; user-select:none; -webkit-user-select:none; }
+    .mark { background: var(--good); color:#fff; }
+    .del  { background: var(--bad);  color:#fff; }
+    .undo { background: var(--warn); color:#000; }
+
+    /* Topic drawer styles */
+    .topic-drawer {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 240px;
+      height: 100%;
+      background: var(--panel);
+      color: var(--text);
+      box-shadow: 2px 0 12px rgba(0,0,0,.4);
+      transform: translateX(-100%);
+      transition: transform 0.3s ease;
+      z-index: 14;
+      padding: 12px;
+      overflow-y: auto;
+    }
+    .topic-drawer.open { transform: translateX(0); }
+    .topic-drawer h4 {
+      margin: 4px 0 8px;
+      font-size: 18px;
+    }
+    .topic-item {
+      display:flex;
+      align-items:center;
+      padding:6px;
+      border-radius:6px;
+      cursor:pointer;
+      margin-bottom:4px;
+    }
+    .topic-item:hover { background: rgba(255,255,255,.08); }
+    .topic-item.active { background: rgba(255,255,255,.12); }
+    .topic-item .ribbon {
+      width:14px;
+      height:14px;
+      border-radius:2px;
+      margin-right:8px;
+    }
+
+    /* Modal and drawing styles remain mostly unchanged */
+    .modal { position: fixed; inset: 0; background: rgba(0,0,0,.65); display:none; align-items:center; justify-content:center; z-index: 20; }
+    .modal-content { background:#fff; color:#111; width:min(92vw, 860px); max-height: 92vh; overflow:auto; border-radius: 14px; padding: 16px; }
+    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    @media (max-width: 720px){ .grid { grid-template-columns: 1fr; } }
+    .toolbar { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
+    .toolbar button{ background:#eef2ff; border:1px solid #cfd6ff; border-radius:8px; padding:6px 8px; cursor:pointer; }
+    .toolbar input[type=color], .toolbar select{ height:30px; border:1px solid #cfd6ff; border-radius:8px; }
+    .ed { border:1px solid #cfd6ff; border-radius:10px; min-height:110px; padding:10px; background:#fff; overflow:auto; }
+    .thumb { display:flex; align-items:center; gap:8px; margin-top:8px; }
+    .thumb img{ height:44px; width:auto; border:1px solid #ddd; border-radius:6px; }
+    .modal-content .primary{ background: var(--accent); color:#fff; border:none; border-radius:10px; padding:10px 12px; cursor:pointer; }
+    .modal-content .secondary{ background:#555; color:#fff; border:none; border-radius:10px; padding:10px 12px; cursor:pointer; }
+
+    /* Colour picker styles */
+    .colour-options { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
+    .colour-opt {
+      width:24px;
+      height:24px;
+      border-radius:50%;
+      border:2px solid transparent;
+      cursor:pointer;
+    }
+    .colour-opt.selected { border-color: var(--accent); }
+
+    /* Custom input for topic */
+    .topic-input {
+      width:100%;
+      padding:6px 8px;
+      border-radius:8px;
+      border:1px solid #cfd6ff;
+      margin-top:6px;
+    }
+
+    .devsig {
+      position: fixed;
+      right: 10px;
+      bottom: calc(136px + var(--safe-bottom));
+      font-size: 12px;
+      color: var(--muted);
+      user-select: none;
+      pointer-events: none;
+      z-index: 7;
+    }
+  </style>
+</head>
+<body>
+  <div id="topicDrawer" class="topic-drawer">
+    <h4>Topics</h4>
+    <div id="topicList"></div>
+  </div>
+  <div class="topbar">
+    <button id="drawerToggle" class="drawer-toggle" title="Toggle topics">☰</button>
+    <div class="left-actions">
+      <button onclick="fileInput.click()">Import</button>
+      <button onclick="exportJSON()">Export JSON</button>
+      <button onclick="exportCSV()">Export CSV</button>
+      <button onclick="openModal()">Add</button>
+      <button onclick="editCard()">Edit</button>
+      <button onclick="shuffleDeck()">Shuffle</button>
+    </div>
+    <div class="views" id="views">
+      <button id="tab-remaining" class="active" onclick="setView('remaining')">Remaining <span id="ct-remaining">0</span></button>
+      <button id="tab-seen" onclick="setView('seen')">Seen <span id="ct-seen">0</span></button>
+      <button id="tab-mastered" onclick="setView('mastered')">Mastered <span id="ct-mastered">0</span></button>
+      <button id="tab-random" onclick="setView('random')">Random <span id="ct-random">0</span></button>
+    </div>
+    <div class="counter">
+      <button id="overflowBtn" title="More" onclick="toggleOverflow()">⋮</button>
+      <div id="overflowMenu">
+        <button onclick="openModal(); toggleOverflow(true)">Add</button>
+        <button onclick="editCard(); toggleOverflow(true)">Edit</button>
+        <button onclick="fileInput.click(); toggleOverflow(true)">Import</button>
+        <button onclick="exportJSON(); toggleOverflow(true)">Export JSON</button>
+        <button onclick="exportCSV(); toggleOverflow(true)">Export CSV</button>
+        <button onclick="openCamHelp(); toggleOverflow(true)">Camera help</button>
+        <button onclick="shuffleDeck(); toggleOverflow(true)">Shuffle</button>
+      </div>
+      <input id="jump" type="number" min="1" value="1" onkeydown="handleJump(event)"><span class="slash">&nbsp;/&nbsp;</span><span id="total" class="total">0</span>
+    </div>
+  </div>
+  <div class="filter-bar">
+    <input id="keywordInput" type="text" placeholder="Keyword filter…" />
+    <label><input type="checkbox" id="keywordToggle"> Enable filter</label>
+  </div>
+  <input type="file" id="fileInput" accept=".json,.cards,application/json" hidden>
+
+  <div class="wrap">
+    <div id="card" class="flashcard">
+      <div class="card-inner" id="cardInner">
+        <div class="panel front" id="front"></div>
+        <div class="panel back"  id="back"></div>
+      </div>
+    </div>
+    <button id="showBtn" class="show" title="Hold to show answer" oncontextmenu="return false">Hold to Show Answer</button>
+    <button id="lockPill" class="lock-pill" onclick="unlockAnswer()">Answer locked — tap to hide</button>
+  </div>
+
+  <!-- Arrows for navigation -->
+  <button class="arrow left"  title="Previous card">&#x25C0;</button>
+  <button class="arrow right" title="Next card">&#x25B6;</button>
+
+  <div class="bottombar">
+    <button class="mark" onclick="markMastered()">Mark Mastered</button>
+    <button class="del"  onclick="deleteCard()">Delete</button>
+    <button class="undo" onclick="undoDelete()">Undo</button>
+  </div>
+
+  <!-- Add/Edit Modal -->
+  <div class="modal" id="modal">
+    <div class="modal-content">
+      <h3 id="modalTitle">Add Flashcard</h3>
+      <div class="grid">
+        <section>
+          <label>Question</label>
+          <div class="toolbar">
+            <button type="button" onclick="fmt('bold')"><b>B</b></button>
+            <button type="button" onclick="fmt('italic')"><i>I</i></button>
+            <button type="button" onclick="fmt('underline')"><u>U</u></button>
+            <input type="color" onchange="setColor(this.value)">
+            <select onchange="setSize(this.value)">
+              <option value="">Size</option>
+              <option value="2">Small</option>
+              <option value="3">Normal</option>
+              <option value="4">Large</option>
+              <option value="5">X-Large</option>
+            </select>
+          </div>
+          <div id="qEd" class="ed" contenteditable="true" data-placeholder="Enter question..."></div>
+          <label>Question Image (optional)</label>
+          <input type="file" id="qImg" accept="image/*">
+          <div class="thumb" id="qThumb" style="display:none">
+            <img id="qThumbImg" alt="Question image preview"/>
+            <button type="button" class="secondary" onclick="removeQImg()">Remove image</button>
+          </div>
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="primary" onclick="openDrawing('q')">Draw / annotate (Question)</button>
+            <button type="button" class="secondary" onclick="cameraEntry('q')">Camera (Question)</button>
+          </div>
+        </section>
+        <section>
+          <label>Answer</label>
+          <div class="toolbar">
+            <button type="button" onclick="fmt('bold')"><b>B</b></button>
+            <button type="button" onclick="fmt('italic')"><i>I</i></button>
+            <button type="button" onclick="fmt('underline')"><u>U</u></button>
+            <input type="color" onchange="setColor(this.value)">
+            <select onchange="setSize(this.value)">
+              <option value="">Size</option>
+              <option value="2">Small</option>
+              <option value="3">Normal</option>
+              <option value="4">Large</option>
+              <option value="5">X-Large</option>
+            </select>
+          </div>
+          <div id="aEd" class="ed" contenteditable="true" data-placeholder="Enter answer..."></div>
+          <label>Answer Image (optional)</label>
+          <input type="file" id="aImg" accept="image/*">
+          <div class="thumb" id="aThumb" style="display:none">
+            <img id="aThumbImg" alt="Answer image preview"/>
+            <button type="button" class="secondary" onclick="removeAImg()">Remove image</button>
+          </div>
+          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="primary" onclick="openDrawing('a')">Draw / annotate (Answer)</button>
+            <button type="button" class="secondary" onclick="cameraEntry('a')">Camera (Answer)</button>
+          </div>
+        </section>
+      </div>
+      <!-- Colour and topic selection -->
+      <div style="margin-top:16px;">
+        <label>Card Colour</label>
+        <div id="colourOptions" class="colour-options"></div>
+        <label style="margin-top:12px; display:block;">Topic</label>
+        <input id="topicInput" type="text" class="topic-input" placeholder="Enter topic (optional)">
+      </div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top: 12px;">
+        <!-- Save button triggers saveCard via global click handler -->
+        <button id="saveCardBtn" class="primary">Save</button>
+        <button class="secondary" onclick="closeModal()">Cancel</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden camera pickers (fallback when not secure) -->
+  <input type="file" id="qCam" accept="image/*" capture="environment" hidden>
+  <input type="file" id="aCam" accept="image/*" capture="environment" hidden>
+
+  <!-- Drawing Modal -->
+  <div class="modal" id="drawModal">
+    <div class="modal-content draw">
+      <h3>Draw / Annotate</h3>
+      <div class="draw-toolbar">
+        <label style="display:flex; align-items:center; gap:6px;">Colour
+          <input type="color" id="drawColor" value="#000000" onchange="syncDrawSettings()">
+        </label>
+        <label style="display:flex; align-items:center; gap:6px;">Thickness
+          <input type="range" id="drawThick" min="1" max="12" value="2" onchange="syncDrawSettings()" style="width:120px;">
+        </label>
+        <button id="eraserBtn" type="button" onclick="toggleEraser()">Eraser</button>
+        <button type="button" onclick="undoStroke()">Undo</button>
+        <label style="display:flex; align-items:center; gap:6px; margin-left:auto;">
+          <input type="checkbox" id="bgToggle" checked>
+          Use current image as background
+        </label>
+        <button class="primary" onclick="saveDrawing()">Save</button>
+        <button class="secondary" onclick="closeDrawing()">Cancel</button>
+      </div>
+      <canvas id="drawCanvas" width="640" height="400"></canvas>
+    </div>
+  </div>
+
+  <!-- Camera Modal -->
+  <div class="modal" id="cameraModal">
+    <div class="modal-content draw">
+      <h3>Take a photo</h3>
+      <div class="draw-toolbar">
+        <button type="button" id="switchCamBtn" onclick="switchCamera()">Switch camera</button>
+        <span id="camStatus" style="margin-left:auto;"></span>
+        <button class="primary" onclick="takePhoto()">Capture</button>
+        <button class="secondary" onclick="closeCamera()">Cancel</button>
+      </div>
+      <div style="position:relative; width:100%; max-height:70vh; overflow:hidden; border:1px solid #ddd; border-radius:10px; background:#000;">
+        <video id="cameraVideo" autoplay playsinline style="width:100%; height:auto; display:block; background:#000;"></video>
+      </div>
+      <canvas id="cameraCanvas" width="640" height="480" style="display:none;"></canvas>
+    </div>
+  </div>
+
+  <!-- Camera Help Modal -->
+  <div class="modal" id="camHelpModal">
+    <div class="modal-content draw">
+      <h3>Enable camera access</h3>
+      <div id="camHelpBody" style="line-height:1.4;"></div>
+      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top: 12px;">
+        <button class="secondary" onclick="closeCamHelp()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="devsig">Developer: Iain Stewart ScotGEM 2025</div>
+
+  <script>
+    // Delegate click for save button to handle cases where inline handler fails (e.g., overlay)
+    document.addEventListener('click', function(ev){
+      const target = ev.target;
+      if(!target) return;
+      const btn = target.closest && target.closest('#saveCardBtn');
+      if(btn){
+        ev.preventDefault();
+        saveCard();
+      }
+    });
+    /* Persistent card and progress storage */
+    let cards    = JSON.parse(localStorage.getItem('flashcards')     || '[]');
+    let mastered = JSON.parse(localStorage.getItem('masteredCards')  || '[]');
+    let seen     = JSON.parse(localStorage.getItem('seenCards')      || '[]');
+
+    /* Ensure all card objects have id, color and topic properties */
+    const ensureIds = (arr) => {
+      arr.forEach(c => {
+        if(!c.id) c.id = crypto.randomUUID ? crypto.randomUUID() : (Date.now()+Math.random()).toString(36);
+        if(!c.color) c.color = localStorage.getItem('preferredCardColor') || '#f7f9ff';
+        if(c.topic === undefined) c.topic = '';
+      });
+    };
+    ensureIds(cards); ensureIds(mastered); ensureIds(seen);
+
+    /* Colour palette for new cards */
+    const COLOURS = ['#FFEBEE','#E8F5E9','#E3F2FD','#FFFDE7','#F3E5F5','#EFEBE9','#E8EAF6','#FBE9E7','#ECEFF1'];
+    let selectedColour = localStorage.getItem('preferredCardColor') || '#f7f9ff';
+    let preferredTopic = localStorage.getItem('preferredTopic') || '';
+
+    /* Filter states */
+    let topicFilter = null;
+    let keywordFilter = '';
+    let keywordEnabled = false;
+
+    let current = 0, showingAnswer = false, locked = false, view = 'remaining';
+    let lastDeleted = null, editingIndex = null;
+    let randomOrder = [];
+
+    // Drawing variables
+    let drawTarget = null, drawCanvas, drawCtx, drawing=false, strokes=[], stroke=null, isErasing=false;
+    let bgImage = null;
+    // Camera variables
+    let camTarget = null, camStream = null, camFacing = 'environment';
+    const fileInput = document.getElementById('fileInput');
+
+    /* Save state to localStorage */
+    function saveState(){
+      localStorage.setItem('flashcards', JSON.stringify(cards));
+      localStorage.setItem('masteredCards', JSON.stringify(mastered));
+      localStorage.setItem('seenCards', JSON.stringify(seen));
+    }
+
+    /* Shuffle array using Fisher–Yates */
+    function shuffle(arr){
+      for(let i=arr.length-1; i>0; i--){
+        const j = Math.floor(Math.random() * (i+1));
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+      }
+      return arr;
+    }
+
+    /* Compute list for display taking into account view and filters */
+    function activeList(){
+      if(view === 'random'){
+        return randomOrder;
+      }
+      let base = view === 'mastered' ? mastered : (view === 'seen' ? seen : cards);
+      let list = base;
+      if(topicFilter) list = list.filter(c => c.topic === topicFilter);
+      if(keywordEnabled && keywordFilter){
+        const kw = keywordFilter.toLowerCase();
+        list = list.filter(c => ((c.q && c.q.toLowerCase().includes(kw)) || (c.a && c.a.toLowerCase().includes(kw)) || (c.topic && c.topic.toLowerCase().includes(kw))));
+      }
+      return list;
+    }
+
+    /* Update counts displayed in the UI */
+    function updateCounts(){
+      document.getElementById('ct-remaining').textContent = cards.length;
+      document.getElementById('ct-seen').textContent = seen.length;
+      document.getElementById('ct-mastered').textContent = mastered.length;
+      // compute random count based on filters for remaining
+      let randList = cards;
+      if(topicFilter) randList = randList.filter(c => c.topic === topicFilter);
+      if(keywordEnabled && keywordFilter){
+        const kw = keywordFilter.toLowerCase();
+        randList = randList.filter(c => ((c.q && c.q.toLowerCase().includes(kw)) || (c.a && c.a.toLowerCase().includes(kw)) || (c.topic && c.topic.toLowerCase().includes(kw))));
+      }
+      const randCtEl = document.getElementById('ct-random');
+      if(randCtEl) randCtEl.textContent = randList.length;
+      document.getElementById('total').textContent = activeList().length;
+      document.getElementById('jump').value = activeList().length ? current+1 : 0;
+      // update topic drawer list
+      updateTopicDrawer();
+    }
+
+    /* Toggle overflow menu */
+    function toggleOverflow(forceClose){
+      const menu = document.getElementById('overflowMenu');
+      if(forceClose){ menu.style.display='none'; return; }
+      menu.style.display = menu.style.display==='flex' ? 'none' : 'flex';
+      menu.style.flexDirection = 'column';
+    }
+    document.addEventListener('click', (e)=>{
+      const m=document.getElementById('overflowMenu'); const b=document.getElementById('overflowBtn');
+      if(m.style.display==='flex' && !m.contains(e.target) && e.target!==b){ m.style.display='none'; }
+    });
+
+    /* Lighten a colour by a given fraction (0-1) */
+    function lightenColor(hex, lum=0.1){
+      let c = (hex||'').replace(/#/,'');
+      if(c.length===3) c = c.split('').map(ch => ch+ch).join('');
+      let r = parseInt(c.substring(0,2),16);
+      let g = parseInt(c.substring(2,4),16);
+      let b = parseInt(c.substring(4,6),16);
+      r = Math.round(Math.min(255, r + (255 - r)*lum));
+      g = Math.round(Math.min(255, g + (255 - g)*lum));
+      b = Math.round(Math.min(255, b + (255 - b)*lum));
+      return '#' + [r,g,b].map(x => x.toString(16).padStart(2,'0')).join('');
+    }
+
+    /* Render a specific card */
+    function render(){
+      const front = document.getElementById('front');
+      const back  = document.getElementById('back');
+      const inner = document.getElementById('cardInner');
+      const show  = document.getElementById('showBtn');
+      const list  = activeList();
+      if(!front||!back||!inner||!show) return;
+
+      if(list.length === 0){
+        const msg = view === 'mastered' ? 'No mastered cards.' : (view === 'seen' ? 'No seen cards.' : (view === 'random' ? 'No cards to randomise.' : 'No cards. Add or import some.'));
+        front.innerHTML = msg; back.innerHTML = msg;
+        front.style.background = '#f7f9ff';
+        back.style.background  = '#eef2ff';
+        show.style.display = 'none';
+        inner.classList.remove('flipped'); updateCounts(); return;
+      }
+      const card = list[current];
+      const prefix = view === 'mastered' ? '<em>(Mastered)</em><br>' : (view === 'seen' ? '<em>(Seen)</em><br>' : '');
+      let qHtml = prefix + (card.q || '');
+      const qImage = card.qImg; if(qImage) qHtml += `<br><img src="${qImage}">`;
+      let aHtml = prefix + (card.a || '');
+      const aImage = card.aImg; if(aImage) aHtml += `<br><img src="${aImage}">`;
+      front.innerHTML = qHtml; back.innerHTML = aHtml;
+      // Set colours based on card colour
+      const clr = card.color || '#f7f9ff';
+      front.style.background = clr;
+      back.style.background  = lightenColor(clr, 0.06);
+      show.style.display = 'block';
+      if(showingAnswer) inner.classList.add('flipped'); else inner.classList.remove('flipped');
+      document.getElementById('lockPill').style.display = locked ? 'block' : 'none';
+      updateCounts();
+    }
+
+    /* Update topic list drawer */
+    function updateTopicDrawer(){
+      const listEl = document.getElementById('topicList');
+      if(!listEl) return;
+      // collect unique topics from all cards
+      const allCards = cards.concat(seen).concat(mastered);
+      const topics = Array.from(new Set(allCards.map(c => c.topic || '').filter(t => t)));
+      listEl.innerHTML = '';
+      // 'All' option
+      const allDiv = document.createElement('div');
+      allDiv.className = 'topic-item' + (topicFilter===null ? ' active' : '');
+      const allRibbon = document.createElement('div');
+      allRibbon.className = 'ribbon';
+      allRibbon.style.background = '#888';
+      allDiv.appendChild(allRibbon);
+      const allSpan = document.createElement('span'); allSpan.textContent = 'All';
+      allDiv.appendChild(allSpan);
+      allDiv.onclick = () => { topicFilter=null; toggleDrawer(true); hideAnswer(); setView(view); };
+      listEl.appendChild(allDiv);
+      topics.forEach(t => {
+        // find a card to get its colour
+        const sample = allCards.find(c => c.topic === t);
+        const colour = sample && sample.color ? sample.color : '#f7f9ff';
+        const div = document.createElement('div');
+        div.className = 'topic-item' + (topicFilter===t ? ' active' : '');
+        const ribbon = document.createElement('div');
+        ribbon.className = 'ribbon';
+        ribbon.style.background = colour;
+        div.appendChild(ribbon);
+        const span = document.createElement('span'); span.textContent = t;
+        div.appendChild(span);
+        div.onclick = () => { topicFilter = t; toggleDrawer(true); hideAnswer(); setView(view); };
+        listEl.appendChild(div);
+      });
+    }
+
+    /* Show next/previous card */
+    function nextCard(){ const list = activeList(); if(!list.length) return; current = (current + 1) % list.length; hideAnswer(); }
+    function prevCard(){ const list = activeList(); if(!list.length) return; current = (current - 1 + list.length) % list.length; hideAnswer(); }
+
+    let startX = null;
+    function showAnswer(){ showingAnswer = true; render(); maybeAddToSeen(); }
+    function hideAnswer(){ showingAnswer = false; locked = false; render(); }
+    function unlockAnswer(){ locked = false; hideAnswer(); }
+    function onDown(e){ startX = (e.touches? e.touches[0].clientX : e.clientX); showAnswer(); }
+    function onMove(e){ if(startX==null) return; const x = (e.touches? e.touches[0].clientX : e.clientX); if(x - startX > 70){ locked = true; document.getElementById('lockPill').style.display = 'block'; } }
+    function onUp(){ if(!locked) hideAnswer(); startX = null; }
+
+    /* Mark card as seen when answer shown */
+    function maybeAddToSeen(){
+      const list = activeList();
+      if(list.length){
+        const card = list[current];
+        const already = seen.some(c => c.id === card.id);
+        const inRemaining = cards.some(c => c.id === card.id);
+        const inMastered  = mastered.some(c => c.id === card.id);
+        if(inRemaining && !inMastered && !already){ seen.push(card); saveState(); updateCounts(); }
+      }
+    }
+
+    /* Mark card as mastered */
+    function markMastered(){
+      const list = activeList(); if(!list.length) return;
+      const card = list[current];
+      if(!mastered.some(c => c.id === card.id)) mastered.push(card);
+      // remove from cards and seen
+      cards = cards.filter(c => c.id !== card.id);
+      seen  = seen.filter(c => c.id !== card.id);
+      if(current >= activeList().length) current = 0;
+      hideAnswer(); saveState();
+    }
+
+    /* Delete card */
+    function deleteCard(){
+      const list = activeList(); if(!list.length) return;
+      const card = list[current];
+      lastDeleted = { card: structuredClone(card), from: view, index: current };
+      if(view === 'remaining'){
+        cards = cards.filter(c => c.id !== card.id);
+        seen = seen.filter(c => c.id !== card.id);
+      }
+      else if(view === 'seen'){ seen = seen.filter(c => c.id !== card.id); }
+      else { mastered = mastered.filter(c => c.id !== card.id); }
+      if(current >= activeList().length) current = 0;
+      hideAnswer(); saveState();
+    }
+
+    /* Undo delete */
+    function undoDelete(){
+      if(!lastDeleted) return; const { card, from, index } = lastDeleted;
+      if(from === 'remaining'){ cards.splice(Math.min(index, cards.length), 0, card); }
+      else if(from === 'seen'){ if(cards.some(c => c.id === card.id)) seen.splice(Math.min(index, seen.length), 0, card); }
+      else { mastered.splice(Math.min(index, mastered.length), 0, card); }
+      lastDeleted = null; hideAnswer(); saveState();
+    }
+
+    /* Modal open/close for adding/editing */
+    function openModal(){
+      editingIndex = null;
+      document.getElementById('modalTitle').textContent = 'Add Flashcard';
+      document.getElementById('qEd').innerHTML = '';
+      document.getElementById('aEd').innerHTML = '';
+      setThumb('q', null); setThumb('a', null);
+      document.getElementById('qImg').value = ''; document.getElementById('aImg').value = '';
+      document.getElementById('topicInput').value = preferredTopic;
+      chooseColour(selectedColour, false); // highlight previously selected colour but don't update global
+      document.getElementById('modal').style.display = 'flex';
+    }
+    function closeModal(){ document.getElementById('modal').style.display = 'none'; }
+
+    /* Edit current card */
+    function editCard(){
+      const list = activeList(); if(!list.length) return; const card = list[current]; editingIndex = current;
+      document.getElementById('modalTitle').textContent = 'Edit Flashcard';
+      document.getElementById('qEd').innerHTML = card.q || '';
+      document.getElementById('aEd').innerHTML = card.a || '';
+      setThumb('q', card.qImg || null); setThumb('a', card.aImg || null);
+      document.getElementById('qImg').value = ''; document.getElementById('aImg').value = '';
+      document.getElementById('topicInput').value = card.topic || '';
+      chooseColour(card.color || selectedColour, false);
+      document.getElementById('modal').style.display = 'flex';
+    }
+
+    /* Read image as data URL */
+    function readAsDataURL(file){ return new Promise((res, rej)=>{ const r=new FileReader(); r.onload=e=>res(e.target.result); r.onerror=rej; r.readAsDataURL(file); }); }
+
+    /* Save card (new or edited) */
+    async function saveCard(){
+      // Save card triggered
+      const q = document.getElementById('qEd').innerHTML.trim();
+      const a = document.getElementById('aEd').innerHTML.trim();
+      let qImg = getThumb('q'); let aImg = getThumb('a');
+      const qF = document.getElementById('qImg').files[0]; const aF = document.getElementById('aImg').files[0];
+      if(qF) qImg = await readAsDataURL(qF); if(aF) aImg = await readAsDataURL(aF);
+      const topic = document.getElementById('topicInput').value.trim();
+
+      // update preferred topic
+      preferredTopic = topic;
+      localStorage.setItem('preferredTopic', preferredTopic);
+
+      if(editingIndex !== null){
+        const card = activeList()[editingIndex];
+        card.q = q; card.a = a; card.qImg = qImg || null; card.aImg = aImg || null;
+        card.topic = topic;
+        card.color = selectedColour;
+      } else {
+        const card = { id: crypto.randomUUID ? crypto.randomUUID() : (Date.now()+Math.random()).toString(36), q, a, qImg, aImg, topic, color: selectedColour };
+        cards.push(card);
+        setView('remaining'); current = cards.length - 1;
+      }
+      closeModal(); hideAnswer(); saveState(); updateTopicDrawer();
+    }
+
+    /* Thumbnail helpers */
+    function setThumb(which, dataUrl){ const box = document.getElementById(which+'Thumb'); const img = document.getElementById(which+'ThumbImg'); if(dataUrl){ box.style.display='flex'; img.src=dataUrl; box.dataset.value=dataUrl; } else { box.style.display='none'; img.removeAttribute('src'); box.dataset.value=''; } }
+    function getThumb(which){ const box = document.getElementById(which+'Thumb'); return box.dataset.value || null; }
+    function removeQImg(){ setThumb('q', null); }
+    function removeAImg(){ setThumb('a', null); }
+
+    /* Colour selection logic */
+    function chooseColour(colour, updateGlobal=true){ selectedColour = colour; const opts = document.querySelectorAll('.colour-opt'); opts.forEach(opt => { opt.classList.toggle('selected', opt.dataset.colour === colour); }); if(updateGlobal){ localStorage.setItem('preferredCardColor', selectedColour); } }
+    function initColourOptions(){ const container = document.getElementById('colourOptions'); if(!container) return; container.innerHTML = '';
+      COLOURS.forEach(col => { const div = document.createElement('div'); div.className = 'colour-opt'; div.style.background = col; div.dataset.colour = col; div.onclick = () => chooseColour(col, true); container.appendChild(div); }); chooseColour(selectedColour, false);
+    }
+
+    /* Drawing helpers (unchanged except for context) */
+    function openDrawing(target){
+      drawTarget = target; const modal = document.getElementById('drawModal'); drawCanvas = document.getElementById('drawCanvas'); modal.style.display='flex';
+      const rect = drawCanvas.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1; drawCanvas.style.width = rect.width+'px'; drawCanvas.style.height = rect.height+'px'; drawCanvas.width = rect.width * dpr; drawCanvas.height = rect.height * dpr; drawCtx = drawCanvas.getContext('2d'); drawCtx.scale(dpr,dpr);
+      strokes=[]; stroke=null; drawing=false; isErasing=false; document.getElementById('eraserBtn').classList.remove('active');
+      bgImage = null;
+      const bgToggle = document.getElementById('bgToggle');
+      const src = target==='q' ? (getThumb('q')) : (getThumb('a'));
+      if(bgToggle.checked && src){ bgImage = new Image(); bgImage.onload = renderStrokes; bgImage.src = src; } else { renderStrokes(); }
+      drawCanvas.onpointerdown = startDraw; drawCanvas.onpointermove = drawMove; drawCanvas.onpointerup = endDraw; drawCanvas.onpointerleave = endDraw;
+    }
+    function closeDrawing(){ document.getElementById('drawModal').style.display='none'; drawCanvas.onpointerdown = drawCanvas.onpointermove = drawCanvas.onpointerup = drawCanvas.onpointerleave = null; }
+    function syncDrawSettings(){ /* no-op for dynamic updates */ }
+    function toggleEraser(){ isErasing = !isErasing; document.getElementById('eraserBtn').classList.toggle('active', isErasing); }
+    function startDraw(e){ drawing=true; const {x,y}=coords(e); const color = isErasing ? '#ffffff' : document.getElementById('drawColor').value; const thick = isErasing ? 18 : parseInt(document.getElementById('drawThick').value,10)||2; stroke={ points:[{x,y}], color, thickness: thick }; strokes.push(stroke); renderStrokes(); }
+    function drawMove(e){ if(!drawing) return; const {x,y}=coords(e); stroke.points.push({x,y}); renderStrokes(); }
+    function endDraw(){ drawing=false; stroke=null; }
+    function coords(e){ const r = drawCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
+    function drawBg(){ if(!bgImage) return; const ctx = drawCtx; const c = drawCanvas; const dpr = window.devicePixelRatio||1; const w=c.width/dpr, h=c.height/dpr; const iw=bgImage.width, ih=bgImage.height; const scale=Math.min(w/iw, h/ih); const dx=(w-iw*scale)/2, dy=(h-ih*scale)/2; ctx.drawImage(bgImage, dx, dy, iw*scale, ih*scale); }
+    function renderStrokes(){ const dpr = window.devicePixelRatio||1; const w=drawCanvas.width/dpr, h=drawCanvas.height/dpr; drawCtx.save(); drawCtx.setTransform(1,0,0,1,0,0); drawCtx.clearRect(0,0,drawCanvas.width,drawCanvas.height); drawCtx.restore(); drawCtx.fillStyle='#ffffff'; drawCtx.fillRect(0,0,w,h); drawBg(); for(const s of strokes){ if(!s.points.length) continue; drawCtx.strokeStyle = s.color; drawCtx.lineWidth = s.thickness; drawCtx.lineCap='round'; drawCtx.beginPath(); drawCtx.moveTo(s.points[0].x,s.points[0].y); for(let i=1;i<s.points.length;i++){ const p=s.points[i]; drawCtx.lineTo(p.x,p.y); } drawCtx.stroke(); drawCtx.closePath(); } }
+    function undoStroke(){ if(strokes.length){ strokes.pop(); renderStrokes(); } }
+    function saveDrawing(){ renderStrokes(); const data = drawCanvas.toDataURL('image/png'); if(drawTarget==='q'){ setThumb('q', data); } else { setThumb('a', data); } closeDrawing(); }
+
+    /* Camera helpers (unchanged) */
+    function cameraEntry(target){
+      if(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
+        openCamera(target);
+      } else {
+        const picker = document.getElementById(target === 'q' ? 'qCam' : 'aCam');
+        picker.onchange = async (e)=>{
+          const f = e.target.files[0]; if(!f) return;
+          const data = await readAsDataURL(f);
+          if(target==='q') setThumb('q', data); else setThumb('a', data);
+          e.target.value = '';
+        };
+        picker.click();
+      }
+    }
+    function openCamHelp(message){
+      const help = document.getElementById('camHelpBody');
+      const origin = location.origin;
+      const isSecure = window.isSecureContext;
+      const proto = location.protocol;
+      const insecureNote = isSecure ? '' : `<li>This page is not in a secure context (<code>${proto}</code>). Camera requires <b>https:</b> or <b>http://localhost</b>. If you opened this from a file or chat app (e.g. <code>content://</code>), use the Camera button (fallback) or host it over https.</li>`;
+      help.innerHTML = `\n        <p>${message || 'We could not access the camera.'}</p>\n        <ul>\n          ${insecureNote}\n          <li>Android Chrome: Menu → Settings → Site settings → Camera → Allow for this site, then reload.</li>\n          <li>You can always use the “Question Image / Answer Image” pickers to choose from Files/Photos.</li>\n        </ul>`;
+      document.getElementById('camHelpModal').style.display = 'flex';
+    }
+    function closeCamHelp(){ document.getElementById('camHelpModal').style.display='none'; }
+    async function openCamera(target){
+      camTarget = target;
+      const modal = document.getElementById('cameraModal');
+      const video = document.getElementById('cameraVideo');
+      const status = document.getElementById('camStatus');
+      status.textContent = 'Starting camera…';
+      modal.style.display = 'flex';
+      try {
+        if(navigator.permissions && navigator.permissions.query){
+          try{
+            const p = await navigator.permissions.query({ name: 'camera' });
+            if(p.state === 'denied'){
+              throw new Error('Permission denied. Enable in site settings.');
+            }
+          }catch(_){ }
+        }
+        await stopCam();
+        camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: camFacing } }, audio: false });
+        video.srcObject = camStream;
+        status.textContent = camFacing === 'user' ? 'Front camera' : 'Back camera';
+      } catch (err) {
+        console.error(err);
+        document.getElementById('cameraModal').style.display = 'none';
+        openCamHelp(err && err.message ? err.message : 'Camera not available or permission denied.');
+      }
+    }
+    async function switchCamera(){ camFacing = camFacing === 'user' ? 'environment' : 'user'; if(document.getElementById('cameraModal').style.display !== 'flex') return; await openCamera(camTarget); }
+    function takePhoto(){
+      const video = document.getElementById('cameraVideo');
+      const canvas = document.getElementById('cameraCanvas');
+      if(!video.videoWidth){ alert('Camera not ready yet.'); return; }
+      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const data = canvas.toDataURL('image/jpeg', 0.92);
+      if(camTarget === 'q') setThumb('q', data); else setThumb('a', data);
+      closeCamera();
+    }
+    async function stopCam(){ if(camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; } }
+    async function closeCamera(){ await stopCam(); document.getElementById('cameraModal').style.display = 'none'; }
+
+    /* Export JSON with progress saved */
+    const EXPORT_EXT = '.json';
+    function exportJSON(){ const data = { cards, seen, mastered }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'flashcards' + EXPORT_EXT; a.click(); URL.revokeObjectURL(url); }
+
+    /* Export CSV for Google Sheets */
+    function exportCSV(){
+      const headers = ['Topic','Question','Answer','Colour','QImage','AImage'];
+      const rows = [headers];
+      cards.forEach(c => {
+        rows.push([
+          (c.topic || '').replace(/"/g,'""'),
+          (c.q || '').replace(/"/g,'""'),
+          (c.a || '').replace(/"/g,'""'),
+          (c.color || '').replace(/"/g,'""'),
+          (c.qImg || '').replace(/"/g,'""'),
+          (c.aImg || '').replace(/"/g,'""')
+        ]);
+      });
+      const csv = rows.map(r => r.map(val => `"${val}"`).join(',')).join('\n');
+      const blob = new Blob([csv], { type: 'text/csv' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = 'flashcards.csv'; a.click(); URL.revokeObjectURL(url);
+    }
+
+    /* Import cards file */
+    fileInput.addEventListener('change', (e)=>{ const file = e.target.files[0]; if(!file) return; const r = new FileReader(); r.onload = (ev)=>{ try{ const data = JSON.parse(ev.target.result); cards = Array.isArray(data.cards)?data.cards:[]; seen = Array.isArray(data.seen)?data.seen:[]; mastered = Array.isArray(data.mastered)?data.mastered:[]; ensureIds(cards); ensureIds(seen); ensureIds(mastered);
+          const bySig = c=>`${c.q||''}\u0001${c.a||''}\u0001${c.qImg||''}\u0001${c.aImg||''}`; const map = new Map(cards.map(c=>[bySig(c), c])); seen = seen.map(s=>map.get(bySig(s))||s); mastered = mastered.map(m=>map.get(bySig(m))||m);
+          setView('remaining'); current=0; hideAnswer(); saveState(); updateTopicDrawer(); }catch(err){ alert('Could not parse the cards file.'); } }; r.readAsText(file); e.target.value=''; });
+
+    /* Rich text formatting commands */
+    function fmt(cmd){ document.execCommand(cmd, false, null); }
+    function setColor(c){ document.execCommand('foreColor', false, c); }
+    function setSize(s){ if(s) document.execCommand('fontSize', false, s); }
+    function handleJump(e){ if(e.key !== 'Enter') return; const list = activeList(); const n = parseInt(e.target.value,10); if(!isNaN(n) && n>=1 && n<=list.length){ current=n-1; hideAnswer(); } else { e.target.select(); } }
+
+    /* View switching */
+    function setView(v){
+      view = v;
+      document.querySelectorAll('.views button').forEach(b=>b.classList.remove('active'));
+      const tab = document.getElementById('tab-'+v);
+      if(tab) tab.classList.add('active');
+      current = 0;
+      if(v === 'random'){
+        // generate random order respecting filters
+        let list = cards.slice();
+        if(topicFilter) list = list.filter(c => c.topic === topicFilter);
+        if(keywordEnabled && keywordFilter){
+          const kw = keywordFilter.toLowerCase();
+          list = list.filter(c => ((c.q && c.q.toLowerCase().includes(kw)) || (c.a && c.a.toLowerCase().includes(kw)) || (c.topic && c.topic.toLowerCase().includes(kw))));
+        }
+        randomOrder = shuffle(list.slice());
+      }
+      hideAnswer();
+    }
+
+    /* Shuffle deck temporarily */
+    function shuffleDeck(){
+      // shuffle remaining cards only
+      cards = shuffle(cards.slice());
+      hideAnswer();
+      if(view === 'random'){
+        // regenerate random order based on new order and filters
+        let list = cards.slice();
+        if(topicFilter) list = list.filter(c => c.topic === topicFilter);
+        if(keywordEnabled && keywordFilter){
+          const kw = keywordFilter.toLowerCase();
+          list = list.filter(c => ((c.q && c.q.toLowerCase().includes(kw)) || (c.a && c.a.toLowerCase().includes(kw)) || (c.topic && c.topic.toLowerCase().includes(kw))));
+        }
+        randomOrder = shuffle(list.slice());
+      }
+      render();
+    }
+
+    /* Drawer toggle */
+    function toggleDrawer(forceClose){ const drawer = document.getElementById('topicDrawer'); if(!drawer) return; if(forceClose){ drawer.classList.remove('open'); return; } drawer.classList.toggle('open'); }
+    document.getElementById('drawerToggle').addEventListener('click', () => { toggleDrawer(); });
+    document.addEventListener('click', (e) => {
+      const drawer = document.getElementById('topicDrawer'); const toggleBtn = document.getElementById('drawerToggle');
+      if(!drawer) return; if(drawer.classList.contains('open')){
+        if(!drawer.contains(e.target) && e.target !== toggleBtn) drawer.classList.remove('open');
+      }
+    });
+
+    /* Keyword filter listeners */
+    document.getElementById('keywordInput').addEventListener('input', (e) => { keywordFilter = e.target.value.trim(); if(keywordEnabled) { current = 0; hideAnswer(); if(view === 'random'){ setView('random'); } else { render(); } } });
+    document.getElementById('keywordToggle').addEventListener('change', (e) => { keywordEnabled = e.target.checked; current = 0; hideAnswer(); if(view === 'random'){ setView('random'); } else { render(); } });
+
+    /* Helper to add accelerated scrolling on arrow buttons */
+    function addRepeatScroll(btn, action){
+      let timerId;
+      let delay;
+      const initialDelay = 500; // milliseconds before repeat starts
+      const speedupFactor = 0.85; // factor to accelerate scrolling (smaller is faster)
+      const minDelay = 80; // minimum delay between scrolls
+      function stop(){
+        if(timerId) clearTimeout(timerId);
+        timerId = null;
+      }
+      btn.addEventListener('pointerdown', (ev) => {
+        ev.preventDefault();
+        // perform one immediate action
+        action();
+        delay = initialDelay;
+        function step(){
+          timerId = setTimeout(() => {
+            action();
+            delay = Math.max(minDelay, delay * speedupFactor);
+            step();
+          }, delay);
+        }
+        step();
+      });
+      ['pointerup','pointerleave','pointercancel'].forEach(event => {
+        btn.addEventListener(event, () => {
+          stop();
+        });
+      });
+    }
+
+    /* Keyboard shortcuts */
+    document.addEventListener('keydown', (e) => {
+      // ignore if typing in input, textarea or contenteditable
+      const tgt = e.target;
+      if(tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
+      if(e.code === 'Space'){ e.preventDefault(); if(showingAnswer) hideAnswer(); else showAnswer(); }
+      else if(e.code === 'ArrowRight'){ e.preventDefault(); nextCard(); }
+      else if(e.code === 'ArrowLeft'){ e.preventDefault(); prevCard(); }
+      else if(e.key && e.key.toLowerCase() === 'm'){ e.preventDefault(); markMastered(); }
+      else if(e.key && e.key.toLowerCase() === 'd'){ e.preventDefault(); deleteCard(); }
+    });
+
+    /* Load deck from config.json, Google Sheets or local file */
+    async function loadDeck(){
+      let loadedFromRemote = false;
+      try {
+        const resCfg = await fetch('config.json');
+        if(resCfg.ok){
+          const cfg = await resCfg.json();
+          if(cfg && cfg.googleSheetID){
+            const sheetName = cfg.sheetName || 'Sheet1';
+            const url = `https://opensheet.elk.sh/${cfg.googleSheetID}/${sheetName}`;
+            try {
+              const resp = await fetch(url);
+              if(resp.ok){
+                const rows = await resp.json();
+                const defaultColor = localStorage.getItem('preferredCardColor') || '#f7f9ff';
+                cards = rows.map(row => ({
+                  id: crypto.randomUUID ? crypto.randomUUID() : (Date.now()+Math.random()).toString(36),
+                  topic: row.Topic || row.topic || '',
+                  q: row.Question || row.question || '',
+                  a: row.Answer || row.answer || '',
+                  color: row.Colour || row.Color || row.colour || row.color || defaultColor,
+                  qImg: row.QImage || row.qimage || row.qImg || null,
+                  aImg: row.AImage || row.aimage || row.aImg || null
+                }));
+                ensureIds(cards);
+                // reset progress when using remote deck
+                seen = [];
+                mastered = [];
+                saveState();
+                loadedFromRemote = true;
+              }
+            } catch(err) {
+              console.warn('Failed to load from Google Sheets', err);
+            }
+          }
+        }
+      } catch(err) {
+        // ignore
+      }
+      if(!loadedFromRemote){
+        // attempt to load cards.json
+        try {
+          const res = await fetch('cards.json');
+          if(res.ok){
+            const data = await res.json();
+            cards = Array.isArray(data.cards) ? data.cards : [];
+            seen = Array.isArray(data.seen) ? data.seen : [];
+            mastered = Array.isArray(data.mastered) ? data.mastered : [];
+            ensureIds(cards); ensureIds(seen); ensureIds(mastered);
+            saveState();
+            return;
+          }
+        } catch(err) {
+          // ignore
+        }
+        // fallback to localStorage deck already loaded at script start
+      }
+    }
+
+    /* Initialize app */
+    window.addEventListener('load', async ()=>{
+      initColourOptions();
+      // attach hold events
+      const show = document.getElementById('showBtn');
+      show.addEventListener('mousedown', onDown);
+      show.addEventListener('mousemove', onMove);
+      show.addEventListener('mouseup', onUp);
+      show.addEventListener('mouseleave', onUp);
+      show.addEventListener('touchstart', onDown, { passive:true });
+      show.addEventListener('touchmove', onMove,   { passive:true });
+      show.addEventListener('touchend', onUp);
+      show.addEventListener('touchcancel', onUp);
+      // Add hold/accelerate behaviour to arrow buttons
+      const leftBtn = document.querySelector('.arrow.left');
+      const rightBtn = document.querySelector('.arrow.right');
+      if(leftBtn && rightBtn){
+        addRepeatScroll(leftBtn, prevCard);
+        addRepeatScroll(rightBtn, nextCard);
+      }
+      // load decks
+      await loadDeck();
+      updateTopicDrawer();
+      setView(view);
+      render();
+      // Save button uses inline onclick, so no additional listener is required
+    });
+
+    // Global click handler for save button to ensure Save works reliably across overlays
+  </script>
+</body>
+</html>
