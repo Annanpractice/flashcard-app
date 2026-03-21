@@ -4,6 +4,25 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Flashcards — Remaining / Seen / Mastered / Random</title>
+  <!--
+    This file defines the client-side interface for the flashcard application.
+    It has been customised to support "topic level" synchronisation with the
+    backing Google Sheet via an Apps Script webapp. The sync workflow allows
+    a user to upload a JSON or CSV file containing cards for a single topic
+    and send those cards to the Apps Script. The script then replaces only
+    the rows belonging to that topic, leaving other topics untouched.
+
+    Additional changes:
+      • Added a "Sync Topic" button in the top bar and overflow menu. When
+        clicked it prompts the user to select a JSON or CSV file; after
+        parsing the file, the app sends a POST request to the Apps Script
+        endpoint containing the topic and cards. On completion the deck is
+        refreshed.
+      • Removed the shuffle option from both the visible button bar and
+        overflow menu, as shuffling the underlying arrays interferes with
+        state management. Random order can still be achieved via the
+        "Random" tab.
+  -->
   <style>
     :root {
       --bg: #0e1222;
@@ -250,7 +269,8 @@
       <button onclick="exportCSV()">Export CSV</button>
       <button onclick="openModal()">Add</button>
       <button onclick="editCard()">Edit</button>
-      <button onclick="shuffleDeck()">Shuffle</button>
+      <!-- Removed Shuffle button as shuffling the deck interferes with state -->
+      <button onclick="syncTopicPrompt()">Sync Topic</button>
     </div>
     <div class="views" id="views">
       <button id="tab-remaining" class="active" onclick="setView('remaining')">Remaining <span id="ct-remaining">0</span></button>
@@ -267,7 +287,8 @@
         <button onclick="exportJSON(); toggleOverflow(true)">Export JSON</button>
         <button onclick="exportCSV(); toggleOverflow(true)">Export CSV</button>
         <button onclick="openCamHelp(); toggleOverflow(true)">Camera help</button>
-        <button onclick="shuffleDeck(); toggleOverflow(true)">Shuffle</button>
+        <!-- Removed Shuffle from overflow menu -->
+        <button onclick="syncTopicPrompt(); toggleOverflow(true)">Sync Topic</button>
       </div>
       <input id="jump" type="number" min="1" value="1" onkeydown="handleJump(event)"><span class="slash">&nbsp;/&nbsp;</span><span id="total" class="total">0</span>
     </div>
@@ -277,6 +298,8 @@
     <label><input type="checkbox" id="keywordToggle"> Enable filter</label>
   </div>
   <input type="file" id="fileInput" accept=".json,.cards,application/json" hidden>
+  <!-- Dedicated file input for syncing a topic -->
+  <input type="file" id="syncInput" accept=".json,.csv,application/json,text/csv" hidden>
 
   <div class="wrap">
     <div id="card" class="flashcard">
@@ -478,6 +501,7 @@
     // Camera variables
     let camTarget = null, camStream = null, camFacing = 'environment';
     const fileInput = document.getElementById('fileInput');
+    const syncInput = document.getElementById('syncInput');
 
     /* Save state to localStorage */
     function saveState(){
@@ -900,6 +924,7 @@
     }
 
     /* Shuffle deck temporarily */
+    // The shuffle functionality is no longer exposed via the UI because random order can be achieved by the 'Random' tab.
     function shuffleDeck(){
       // shuffle remaining cards only
       cards = shuffle(cards.slice());
@@ -1010,6 +1035,10 @@
               console.warn('Failed to load from Google Sheets', err);
             }
           }
+          // capture scriptUrl from config if provided
+          if(cfg && cfg.scriptUrl){
+            window.scriptUrl = cfg.scriptUrl;
+          }
         }
       } catch(err) {
         // ignore
@@ -1032,6 +1061,106 @@
         }
         // fallback to localStorage deck already loaded at script start
       }
+    }
+
+    /* Sync Topic feature */
+    // This function prompts the user to select a file and then performs a topic-level
+    // synchronisation with the Apps Script webapp. It expects a JSON file with an
+    // object containing { topic, cards } or { cards: [...] } where all cards share
+    // the same topic, or a CSV file with the first row as headers: Topic,Question,
+    // Answer,Colour,QImage,AImage. After uploading the file, the function sends
+    // the cards to the Apps Script via POST { action: 'syncTopic', topic, cards }.
+    function syncTopicPrompt(){
+      syncInput.value = '';
+      syncInput.click();
+    }
+    syncInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if(!file) return;
+      try {
+        const content = await file.text();
+        let topic;
+        let cardsToSync;
+        if(file.name.toLowerCase().endsWith('.json')){
+          const obj = JSON.parse(content);
+          // Determine topic and cards from JSON
+          if(Array.isArray(obj.cards)){
+            cardsToSync = obj.cards;
+          } else if(Array.isArray(obj)){
+            cardsToSync = obj;
+          } else {
+            throw new Error('Invalid JSON format');
+          }
+          // If a top-level topic property exists, use it; otherwise infer from first card
+          topic = obj.topic || (cardsToSync[0] && (cardsToSync[0].topic || cardsToSync[0].Topic || ''));
+        } else if(file.name.toLowerCase().endsWith('.csv')){
+          // Parse CSV: assume first row header, fields separated by comma with optional quotes
+          const lines = content.trim().split(/\r?\n/);
+          if(lines.length < 2){ throw new Error('CSV does not contain any data'); }
+          const header = lines.shift().split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(h => h.replace(/"/g,'').trim());
+          cardsToSync = [];
+          lines.forEach(row => {
+            // split by comma not inside quotes
+            const values = row.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(val => val.replace(/^"|"$/g,'').replace(/""/g,'"'));
+            const obj = {};
+            header.forEach((h, i) => {
+              obj[h] = values[i] || '';
+            });
+            // convert to expected fields
+            cardsToSync.push({
+              topic: obj.Topic || obj.topic || '',
+              q: obj.Question || obj.question || '',
+              a: obj.Answer || obj.answer || '',
+              color: obj.Colour || obj.Color || obj.colour || obj.color || '',
+              qImg: obj.QImage || obj.qImg || obj.qimage || '',
+              aImg: obj.AImage || obj.aImg || obj.aimage || ''
+            });
+          });
+          topic = cardsToSync[0] && cardsToSync[0].topic;
+        } else {
+          throw new Error('Unsupported file type');
+        }
+        if(!topic){ throw new Error('Could not determine topic from file'); }
+        // ensure each card has expected fields and assign topic if missing
+        cardsToSync = cardsToSync.map(card => ({
+          topic: card.topic || card.Topic || topic || '',
+          q: card.q || card.Question || '',
+          a: card.a || card.Answer || '',
+          color: card.color || card.Colour || card.Color || '',
+          qImg: card.qImg || card.QImage || card.qimage || '',
+          aImg: card.aImg || card.AImage || card.aimage || ''
+        }));
+        // Send POST request to Apps Script
+        await syncTopicWithServer(topic, cardsToSync);
+        // refresh deck after sync
+        await loadDeck();
+        setView('remaining');
+        current = 0;
+        hideAnswer();
+        alert('Topic synced successfully.');
+      } catch(err){
+        console.error(err);
+        alert('Error syncing topic: ' + (err.message || err));
+      }
+      e.target.value = '';
+    });
+    // Helper to send POST request to Apps Script. It expects a global scriptUrl set via config.json or
+    // by editing this file. If scriptUrl is undefined, the user will be alerted.
+    async function syncTopicWithServer(topic, cardsToSync){
+      const url = window.scriptUrl || '';
+      if(!url){ throw new Error('scriptUrl not configured. Please define scriptUrl in config.json.'); }
+      const payload = { action: 'syncTopic', topic: topic, cards: cardsToSync };
+      const res = await fetch(url, {
+        method: 'POST',
+        mode: 'cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if(!res.ok){
+        const text = await res.text();
+        throw new Error('Server error: ' + text);
+      }
+      // Optionally parse server response
     }
 
     /* Initialize app */
@@ -1059,10 +1188,8 @@
       updateTopicDrawer();
       setView(view);
       render();
-      // Save button uses inline onclick, so no additional listener is required
     });
 
-    // Global click handler for save button to ensure Save works reliably across overlays
   </script>
 </body>
 </html>
