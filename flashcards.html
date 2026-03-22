@@ -7,17 +7,24 @@
   <!--
     This file defines the client-side interface for the flashcard application.
     It has been customised to support "topic level" synchronisation with the
-    backing Google Sheet via an Apps Script webapp. The sync workflow allows
-    a user to upload a JSON or CSV file containing cards for a single topic
-    and send those cards to the Apps Script. The script then replaces only
-    the rows belonging to that topic, leaving other topics untouched.
+    backing Google Sheet via an Apps Script webapp. Unlike the previous version,
+    the sync workflow no longer requires uploading a JSON or CSV file for a topic.
+    Instead, the app filters the cards currently loaded in memory based on the
+    selected topic in the sidebar and sends only those cards to the Apps Script
+    endpoint. This allows a user to import a large deck once, then sync one topic
+    at a time without needing to prepare separate files for each topic.
 
     Additional changes:
       • Added a "Sync Topic" button in the top bar and overflow menu. When
-        clicked it prompts the user to select a JSON or CSV file; after
-        parsing the file, the app sends a POST request to the Apps Script
-        endpoint containing the topic and cards. On completion the deck is
-        refreshed.
+        clicked it gathers the cards for the currently selected topic (based on
+        the sidebar filter) and sends them to the Apps Script endpoint. The
+        script then replaces only the rows belonging to that topic, leaving
+        other topics untouched.
+      • Included a guard to display a message if the selected topic has no cards,
+        preventing accidental deletion of topics in the sheet by sending an empty list.
+      • The legacy file-based sync remains in the code (using the hidden file
+        input and its change handler) but is no longer triggered by the Sync Topic
+        button. Users can still manually select a file using the hidden input if needed.
       • Removed the shuffle option from both the visible button bar and
         overflow menu, as shuffling the underlying arrays interferes with
         state management. Random order can still be achieved via the
@@ -298,7 +305,7 @@
     <label><input type="checkbox" id="keywordToggle"> Enable filter</label>
   </div>
   <input type="file" id="fileInput" accept=".json,.cards,application/json" hidden>
-  <!-- Dedicated file input for syncing a topic -->
+  <!-- Dedicated file input for syncing a topic (legacy). The Sync Topic button now uses in-memory filtering. -->
   <input type="file" id="syncInput" accept=".json,.csv,application/json,text/csv" hidden>
 
   <div class="wrap">
@@ -1064,16 +1071,45 @@
     }
 
     /* Sync Topic feature */
-    // This function prompts the user to select a file and then performs a topic-level
-    // synchronisation with the Apps Script webapp. It expects a JSON file with an
-    // object containing { topic, cards } or { cards: [...] } where all cards share
-    // the same topic, or a CSV file with the first row as headers: Topic,Question,
-    // Answer,Colour,QImage,AImage. After uploading the file, the function sends
-    // the cards to the Apps Script via POST { action: 'syncTopic', topic, cards }.
+    // The legacy sync (file-based) remains available via the hidden syncInput's change handler,
+    // but the Sync Topic button now uses in-memory filtering. This function retrieves
+    // the currently selected topic from the sidebar (topicFilter), gathers all cards
+    // across both the "cards" and "mastered" arrays (to include mastered cards as
+    // well as unmastered ones), filters them by the selected topic, and posts
+    // them to the Apps Script endpoint. It guards against sending an empty
+    // payload by alerting the user if no cards exist for the chosen topic.
     function syncTopicPrompt(){
-      syncInput.value = '';
-      syncInput.click();
+      // Determine the currently selected topic
+      const topic = topicFilter;
+      if(!topic){
+        alert('Please select a topic to sync.');
+        return;
+      }
+      // Gather all cards across unmastered and mastered arrays.
+      // (seen is not necessary because it duplicates cards from "cards".)
+      const allCards = cards.concat(mastered);
+      // Filter cards where card.topic equals selected topic
+      const filteredCards = allCards.filter(c => c.topic === topic);
+      // If there are no cards for this topic, inform the user and abort
+      if(filteredCards.length === 0){
+        alert('No cards found for selected topic');
+        return;
+      }
+      // Send the filtered cards to the Apps Script endpoint
+      syncTopicWithServer(topic, filteredCards).then(() => {
+        // After syncing, reload the deck from remote or local to reflect any changes
+        loadDeck().then(() => {
+          setView('remaining');
+          current = 0;
+          hideAnswer();
+          alert('Topic synced successfully.');
+        });
+      }).catch(err => {
+        console.error(err);
+        alert('Error syncing topic: ' + (err && err.message ? err.message : err));
+      });
     }
+    // Legacy file-based sync handler remains: it triggers when a user selects a file manually in syncInput.
     syncInput.addEventListener('change', async (e) => {
       const file = e.target.files[0];
       if(!file) return;
