@@ -29,6 +29,10 @@
         overflow menu, as shuffling the underlying arrays interferes with
         state management. Random order can still be achieved via the
         "Random" tab.
+      • Import and export controls have been removed from the UI. The application
+        no longer surfaces buttons for importing decks or exporting decks as
+        JSON/CSV. The underlying functions remain for legacy support but are
+        inaccessible through the interface.
   -->
   <style>
     :root {
@@ -271,12 +275,9 @@
   <div class="topbar">
     <button id="drawerToggle" class="drawer-toggle" title="Toggle topics">☰</button>
     <div class="left-actions">
-      <button onclick="fileInput.click()">Import</button>
-      <button onclick="exportJSON()">Export JSON</button>
-      <button onclick="exportCSV()">Export CSV</button>
+      <!-- Removed Import/Export controls; only Add, Edit and Sync Topic remain -->
       <button onclick="openModal()">Add</button>
       <button onclick="editCard()">Edit</button>
-      <!-- Removed Shuffle button as shuffling the deck interferes with state -->
       <button onclick="syncTopicPrompt()">Sync Topic</button>
     </div>
     <div class="views" id="views">
@@ -288,13 +289,11 @@
     <div class="counter">
       <button id="overflowBtn" title="More" onclick="toggleOverflow()">⋮</button>
       <div id="overflowMenu">
+        <!-- Overflow menu retains only Add, Edit and Sync Topic -->
         <button onclick="openModal(); toggleOverflow(true)">Add</button>
         <button onclick="editCard(); toggleOverflow(true)">Edit</button>
-        <button onclick="fileInput.click(); toggleOverflow(true)">Import</button>
-        <button onclick="exportJSON(); toggleOverflow(true)">Export JSON</button>
-        <button onclick="exportCSV(); toggleOverflow(true)">Export CSV</button>
         <button onclick="openCamHelp(); toggleOverflow(true)">Camera help</button>
-        <!-- Removed Shuffle from overflow menu -->
+        <!-- Removed Import/Export controls from overflow menu -->
         <button onclick="syncTopicPrompt(); toggleOverflow(true)">Sync Topic</button>
       </div>
       <input id="jump" type="number" min="1" value="1" onkeydown="handleJump(event)"><span class="slash">&nbsp;/&nbsp;</span><span id="total" class="total">0</span>
@@ -304,6 +303,7 @@
     <input id="keywordInput" type="text" placeholder="Keyword filter…" />
     <label><input type="checkbox" id="keywordToggle"> Enable filter</label>
   </div>
+  <!-- Hidden file inputs remain for legacy support; no visible import/export buttons -->
   <input type="file" id="fileInput" accept=".json,.cards,application/json" hidden>
   <!-- Dedicated file input for syncing a topic (legacy). The Sync Topic button now uses in-memory filtering. -->
   <input type="file" id="syncInput" accept=".json,.csv,application/json,text/csv" hidden>
@@ -829,7 +829,13 @@
       const isSecure = window.isSecureContext;
       const proto = location.protocol;
       const insecureNote = isSecure ? '' : `<li>This page is not in a secure context (<code>${proto}</code>). Camera requires <b>https:</b> or <b>http://localhost</b>. If you opened this from a file or chat app (e.g. <code>content://</code>), use the Camera button (fallback) or host it over https.</li>`;
-      help.innerHTML = `\n        <p>${message || 'We could not access the camera.'}</p>\n        <ul>\n          ${insecureNote}\n          <li>Android Chrome: Menu → Settings → Site settings → Camera → Allow for this site, then reload.</li>\n          <li>You can always use the “Question Image / Answer Image” pickers to choose from Files/Photos.</li>\n        </ul>`;
+      help.innerHTML = `
+        <p>${message || 'We could not access the camera.'}</p>
+        <ul>
+          ${insecureNote}
+          <li>Android Chrome: Menu → Settings → Site settings → Camera → Allow for this site, then reload.</li>
+          <li>You can always use the “Question Image / Answer Image” pickers to choose from Files/Photos.</li>
+        </ul>`;
       document.getElementById('camHelpModal').style.display = 'flex';
     }
     function closeCamHelp(){ document.getElementById('camHelpModal').style.display='none'; }
