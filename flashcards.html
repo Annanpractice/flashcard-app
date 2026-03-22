@@ -1053,7 +1053,7 @@
       if(!loadedFromRemote){
         // attempt to load cards.json
         try {
-const res = await fetch('https://drive.googleusercontent.com/uc?id=1Z6_69h9QqRk85C0i5oZEirNjAd0KQ2c_&export=download');          if(res.ok){
+const res = await fetch('https://drive.google.com/uc?export=download&id=1Z6_69h9QqRk85C0i5oZEirNjAd0KQ2c_&confirm=t');          if(res.ok){
             const data = await res.json();
 cards = Array.isArray(data.cards) ? data.cards : data;            seen = Array.isArray(data.seen) ? data.seen : [];
             mastered = Array.isArray(data.mastered) ? data.mastered : [];
