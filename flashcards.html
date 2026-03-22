@@ -4,6 +4,32 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Flashcards — Remaining / Seen / Mastered / Random</title>
+  <!--
+    This file defines the client-side interface for the flashcard application.
+    It has been customised to support "topic level" synchronisation with the
+    backing Google Sheet via an Apps Script webapp. Unlike the previous version,
+    the sync workflow no longer requires uploading a JSON or CSV file for a topic.
+    Instead, the app filters the cards currently loaded in memory based on the
+    selected topic in the sidebar and sends only those cards to the Apps Script
+    endpoint. This allows a user to import a large deck once, then sync one topic
+    at a time without needing to prepare separate files for each topic.
+
+    Additional changes:
+      • Added a "Sync Topic" button in the top bar and overflow menu. When
+        clicked it gathers the cards for the currently selected topic (based on
+        the sidebar filter) and sends them to the Apps Script endpoint. The
+        script then replaces only the rows belonging to that topic, leaving
+        other topics untouched.
+      • Included a guard to display a message if the selected topic has no cards,
+        preventing accidental deletion of topics in the sheet by sending an empty list.
+      • The legacy file-based sync remains in the code (using the hidden file
+        input and its change handler) but is no longer triggered by the Sync Topic
+        button. Users can still manually select a file using the hidden input if needed.
+      • Removed the shuffle option from both the visible button bar and
+        overflow menu, as shuffling the underlying arrays interferes with
+        state management. Random order can still be achieved via the
+        "Random" tab.
+  -->
   <style>
     :root {
       --bg: #0e1222;
@@ -250,7 +276,8 @@
       <button onclick="exportCSV()">Export CSV</button>
       <button onclick="openModal()">Add</button>
       <button onclick="editCard()">Edit</button>
-      <button onclick="shuffleDeck()">Shuffle</button>
+      <!-- Removed Shuffle button as shuffling the deck interferes with state -->
+      <button onclick="syncTopicPrompt()">Sync Topic</button>
     </div>
     <div class="views" id="views">
       <button id="tab-remaining" class="active" onclick="setView('remaining')">Remaining <span id="ct-remaining">0</span></button>
@@ -267,7 +294,8 @@
         <button onclick="exportJSON(); toggleOverflow(true)">Export JSON</button>
         <button onclick="exportCSV(); toggleOverflow(true)">Export CSV</button>
         <button onclick="openCamHelp(); toggleOverflow(true)">Camera help</button>
-        <button onclick="shuffleDeck(); toggleOverflow(true)">Shuffle</button>
+        <!-- Removed Shuffle from overflow menu -->
+        <button onclick="syncTopicPrompt(); toggleOverflow(true)">Sync Topic</button>
       </div>
       <input id="jump" type="number" min="1" value="1" onkeydown="handleJump(event)"><span class="slash">&nbsp;/&nbsp;</span><span id="total" class="total">0</span>
     </div>
@@ -277,6 +305,8 @@
     <label><input type="checkbox" id="keywordToggle"> Enable filter</label>
   </div>
   <input type="file" id="fileInput" accept=".json,.cards,application/json" hidden>
+  <!-- Dedicated file input for syncing a topic (legacy). The Sync Topic button now uses in-memory filtering. -->
+  <input type="file" id="syncInput" accept=".json,.csv,application/json,text/csv" hidden>
 
   <div class="wrap">
     <div id="card" class="flashcard">
@@ -478,6 +508,7 @@
     // Camera variables
     let camTarget = null, camStream = null, camFacing = 'environment';
     const fileInput = document.getElementById('fileInput');
+    const syncInput = document.getElementById('syncInput');
 
     /* Save state to localStorage */
     function saveState(){
@@ -900,6 +931,7 @@
     }
 
     /* Shuffle deck temporarily */
+    // The shuffle functionality is no longer exposed via the UI because random order can be achieved by the 'Random' tab.
     function shuffleDeck(){
       // shuffle remaining cards only
       cards = shuffle(cards.slice());
@@ -1010,6 +1042,10 @@
               console.warn('Failed to load from Google Sheets', err);
             }
           }
+          // capture scriptUrl from config if provided
+          if(cfg && cfg.scriptUrl){
+            window.scriptUrl = cfg.scriptUrl;
+          }
         }
       } catch(err) {
         // ignore
@@ -1017,11 +1053,9 @@
       if(!loadedFromRemote){
         // attempt to load cards.json
         try {
-          const res = await fetch('cards.json');
-          if(res.ok){
+const res = await fetch('https://drive.google.com/uc?export=download&id=1Z6_69h9QqRk85C0i5oZEirNjAd0KQ2c_');          if(res.ok){
             const data = await res.json();
-            cards = Array.isArray(data.cards) ? data.cards : [];
-            seen = Array.isArray(data.seen) ? data.seen : [];
+cards = Array.isArray(data.cards) ? data.cards : data;            seen = Array.isArray(data.seen) ? data.seen : [];
             mastered = Array.isArray(data.mastered) ? data.mastered : [];
             ensureIds(cards); ensureIds(seen); ensureIds(mastered);
             saveState();
@@ -1032,6 +1066,135 @@
         }
         // fallback to localStorage deck already loaded at script start
       }
+    }
+
+    /* Sync Topic feature */
+    // The legacy sync (file-based) remains available via the hidden syncInput's change handler,
+    // but the Sync Topic button now uses in-memory filtering. This function retrieves
+    // the currently selected topic from the sidebar (topicFilter), gathers all cards
+    // across both the "cards" and "mastered" arrays (to include mastered cards as
+    // well as unmastered ones), filters them by the selected topic, and posts
+    // them to the Apps Script endpoint. It guards against sending an empty
+    // payload by alerting the user if no cards exist for the chosen topic.
+    function syncTopicPrompt(){
+      // Determine the currently selected topic
+      const topic = topicFilter;
+      if(!topic){
+        alert('Please select a topic to sync.');
+        return;
+      }
+      // Gather all cards across unmastered and mastered arrays.
+      // (seen is not necessary because it duplicates cards from "cards".)
+      const allCards = cards.concat(mastered);
+      // Filter cards where card.topic equals selected topic
+      const filteredCards = allCards.filter(c => c.topic === topic);
+      // If there are no cards for this topic, inform the user and abort
+      if(filteredCards.length === 0){
+        alert('No cards found for selected topic');
+        return;
+      }
+      // Send the filtered cards to the Apps Script endpoint
+      syncTopicWithServer(topic, filteredCards).then(() => {
+        // After syncing, reload the deck from remote or local to reflect any changes
+        loadDeck().then(() => {
+          setView('remaining');
+          current = 0;
+          hideAnswer();
+          alert('Topic synced successfully.');
+        });
+      }).catch(err => {
+        console.error(err);
+        alert('Error syncing topic: ' + (err && err.message ? err.message : err));
+      });
+    }
+    // Legacy file-based sync handler remains: it triggers when a user selects a file manually in syncInput.
+    syncInput.addEventListener('change', async (e) => {
+      const file = e.target.files[0];
+      if(!file) return;
+      try {
+        const content = await file.text();
+        let topic;
+        let cardsToSync;
+        if(file.name.toLowerCase().endsWith('.json')){
+          const obj = JSON.parse(content);
+          // Determine topic and cards from JSON
+          if(Array.isArray(obj.cards)){
+            cardsToSync = obj.cards;
+          } else if(Array.isArray(obj)){
+            cardsToSync = obj;
+          } else {
+            throw new Error('Invalid JSON format');
+          }
+          // If a top-level topic property exists, use it; otherwise infer from first card
+          topic = obj.topic || (cardsToSync[0] && (cardsToSync[0].topic || cardsToSync[0].Topic || ''));
+        } else if(file.name.toLowerCase().endsWith('.csv')){
+          // Parse CSV: assume first row header, fields separated by comma with optional quotes
+          const lines = content.trim().split(/\r?\n/);
+          if(lines.length < 2){ throw new Error('CSV does not contain any data'); }
+          const header = lines.shift().split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(h => h.replace(/"/g,'').trim());
+          cardsToSync = [];
+          lines.forEach(row => {
+            // split by comma not inside quotes
+            const values = row.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(val => val.replace(/^"|"$/g,'').replace(/""/g,'"'));
+            const obj = {};
+            header.forEach((h, i) => {
+              obj[h] = values[i] || '';
+            });
+            // convert to expected fields
+            cardsToSync.push({
+              topic: obj.Topic || obj.topic || '',
+              q: obj.Question || obj.question || '',
+              a: obj.Answer || obj.answer || '',
+              color: obj.Colour || obj.Color || obj.colour || obj.color || '',
+              qImg: obj.QImage || obj.qImg || obj.qimage || '',
+              aImg: obj.AImage || obj.aImg || obj.aimage || ''
+            });
+          });
+          topic = cardsToSync[0] && cardsToSync[0].topic;
+        } else {
+          throw new Error('Unsupported file type');
+        }
+        if(!topic){ throw new Error('Could not determine topic from file'); }
+        // ensure each card has expected fields and assign topic if missing
+        cardsToSync = cardsToSync.map(card => ({
+          topic: card.topic || card.Topic || topic || '',
+          q: card.q || card.Question || '',
+          a: card.a || card.Answer || '',
+          color: card.color || card.Colour || card.Color || '',
+          qImg: card.qImg || card.QImage || card.qimage || '',
+          aImg: card.aImg || card.AImage || card.aimage || ''
+        }));
+        // Send POST request to Apps Script
+        await syncTopicWithServer(topic, cardsToSync);
+        // refresh deck after sync
+        await loadDeck();
+        setView('remaining');
+        current = 0;
+        hideAnswer();
+        alert('Topic synced successfully.');
+      } catch(err){
+        console.error(err);
+        alert('Error syncing topic: ' + (err.message || err));
+      }
+      e.target.value = '';
+    });
+    // Helper to send POST request to Apps Script. It expects a global scriptUrl set via config.json or
+    // by editing this file. If scriptUrl is undefined, the user will be alerted.
+    async function syncTopicWithServer(topic, cardsToSync){
+      const url = window.scriptUrl || '';
+      if(!url){ throw new Error('scriptUrl not configured. Please define scriptUrl in config.json.'); }
+      const payload = { action: 'syncTopic', topic: topic, cards: cardsToSync };
+      const res = await fetch(url, {
+        method: 'POST',
+        mode: 'cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if(!res.ok){
+        const text = await res.text();
+        throw new Error('Server error: ' + text);
+      }
+      // Optionally parse server response
     }
 
     /* Initialize app */
@@ -1059,10 +1222,8 @@
       updateTopicDrawer();
       setView(view);
       render();
-      // Save button uses inline onclick, so no additional listener is required
     });
 
-    // Global click handler for save button to ensure Save works reliably across overlays
   </script>
 </body>
 </html>
