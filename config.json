@@ -1,5 +1,4 @@
 {
-"googleSheetID": "1OSEmvpnf6kOVDaTDLGNs2bzvKauENEYOAG9uQij206M",
-"sheetName": "Sheet1",
-"scriptUrl": "https://script.google.com/macros/s/AKfycbx7aqTkVf9DZU92c09iPPc10JSQrG3LO9bkmJ0D0i46oEYv411EE-94RdyrzhVGAzw/exec"
+  "storage": "google-drive",
+  "driveFolderId": "1EioGNiNTRnHVUqeoM9Y1msJxFWAHWKN4"
 }
