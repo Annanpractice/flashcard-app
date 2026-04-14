@@ -490,9 +490,56 @@
       }
     });
     /* Persistent card and progress storage */
-    let cards    = JSON.parse(localStorage.getItem('flashcards')     || '[]');
-    let mastered = JSON.parse(localStorage.getItem('masteredCards')  || '[]');
-    let seen     = JSON.parse(localStorage.getItem('seenCards')      || '[]');
+    // === IndexedDB (persistent large deck storage) ===
+function openDeckDB() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open('flashcardsDB', 1);
+    req.onupgradeneeded = (e) => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('decks')) {
+        db.createObjectStore('decks');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function saveDeckToIndexedDB(data) {
+  const db = await openDeckDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('decks', 'readwrite');
+    const store = tx.objectStore('decks');
+    store.put(data, 'mainDeck');
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+async function loadDeckFromIndexedDB() {
+  const db = await openDeckDB();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('decks', 'readonly');
+    const store = tx.objectStore('decks');
+    const req = store.get('mainDeck');
+    req.onsuccess = () => resolve(req.result || null);
+    req.onerror = () => reject(req.error);
+  });
+}
+    let cards = [];
+let mastered = [];
+let seen = [];
+
+try {
+  cards = JSON.parse(localStorage.getItem('flashcards') || '[]');
+  mastered = JSON.parse(localStorage.getItem('masteredCards') || '[]');
+  seen = JSON.parse(localStorage.getItem('seenCards') || '[]');
+} catch (err) {
+  console.warn('localStorage load skipped:', err);
+  cards = [];
+  mastered = [];
+  seen = [];
+}
 
     /* Ensure all card objects have id, color and topic properties */
     const ensureIds = (arr) => {
@@ -527,11 +574,15 @@
     const syncInput = document.getElementById('syncInput');
 
     /* Save state to localStorage */
-    function saveState(){
-      localStorage.setItem('flashcards', JSON.stringify(cards));
-      localStorage.setItem('masteredCards', JSON.stringify(mastered));
-      localStorage.setItem('seenCards', JSON.stringify(seen));
-    }
+   function saveState(){
+  try {
+    localStorage.setItem('flashcards', JSON.stringify(cards));
+    localStorage.setItem('masteredCards', JSON.stringify(mastered));
+    localStorage.setItem('seenCards', JSON.stringify(seen));
+  } catch (err) {
+    console.warn('localStorage save skipped:', err);
+  }
+}
 
     /* Shuffle array using Fisher–Yates */
     function shuffle(arr){
@@ -932,10 +983,42 @@
       URL.revokeObjectURL(url);
     }
 
-    /* Import cards file */
-    fileInput.addEventListener('change', (e)=>{ const file = e.target.files[0]; if(!file) return; const r = new FileReader(); r.onload = (ev)=>{ try{ const data = JSON.parse(ev.target.result); cards = Array.isArray(data.cards)?data.cards:[]; seen = Array.isArray(data.seen)?data.seen:[]; mastered = Array.isArray(data.mastered)?data.mastered:[]; ensureIds(cards); ensureIds(seen); ensureIds(mastered);
-          const bySig = c=>`${c.q||''}\u0001${c.a||''}\u0001${c.qImg||''}\u0001${c.aImg||''}`; const map = new Map(cards.map(c=>[bySig(c), c])); seen = seen.map(s=>map.get(bySig(s))||s); mastered = mastered.map(m=>map.get(bySig(m))||m);
-          setView('remaining'); current=0; hideAnswer(); saveState(); updateTopicDrawer(); }catch(err){ alert('Could not parse the cards file.'); } }; r.readAsText(file); e.target.value=''; });
+/* Import cards file */
+fileInput.addEventListener('change', async (e)=>{ 
+  const file = e.target.files[0]; 
+  if(!file) return; 
+
+  const r = new FileReader(); 
+  r.onload = async (ev)=>{ 
+    try{ 
+      const data = JSON.parse(ev.target.result); 
+      cards = Array.isArray(data.cards)?data.cards:[]; 
+      seen = Array.isArray(data.seen)?data.seen:[]; 
+      mastered = Array.isArray(data.mastered)?data.mastered:[]; 
+
+      ensureIds(cards); 
+      ensureIds(seen); 
+      ensureIds(mastered);
+
+      const bySig = c=>`${c.q||''}\u0001${c.a||''}\u0001${c.qImg||''}\u0001${c.aImg||''}`; 
+      const map = new Map(cards.map(c=>[bySig(c), c])); 
+      seen = seen.map(s=>map.get(bySig(s))||s); 
+      mastered = mastered.map(m=>map.get(bySig(m))||m);
+
+      setView('remaining'); 
+      current=0; 
+      hideAnswer(); 
+      saveState(); 
+      await saveDeckToIndexedDB({ cards, seen, mastered }); 
+      alert('Deck saved to browser storage');
+      updateTopicDrawer(); 
+    }catch(err){ 
+alert('Import failed: ' + (err && err.message ? err.message : err));    } 
+  }; 
+
+  r.readAsText(file); 
+  e.target.value=''; 
+});
 
     /* Rich text formatting commands */
     function fmt(cmd){ document.execCommand(cmd, false, null); }
@@ -1044,6 +1127,19 @@
 
     /* Load deck from config.json, Google Sheets or local file */
     async function loadDeck(){
+            // Try loading cached deck first
+      const cachedDeck = await loadDeckFromIndexedDB();
+      if (cachedDeck) {
+        cards = Array.isArray(cachedDeck.cards) ? cachedDeck.cards : [];
+        seen = Array.isArray(cachedDeck.seen) ? cachedDeck.seen : [];
+        mastered = Array.isArray(cachedDeck.mastered) ? cachedDeck.mastered : [];
+
+        ensureIds(cards);
+        ensureIds(seen);
+        ensureIds(mastered);
+
+        return;
+      }
       let loadedFromRemote = false;
       try {
         const resCfg = await fetch('config.json');
