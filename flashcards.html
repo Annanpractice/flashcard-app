@@ -29,6 +29,19 @@
         overflow menu, as shuffling the underlying arrays interferes with
         state management. Random order can still be achieved via the
         "Random" tab.
+
+    The file has been further customised to:
+      • Replace the "Export CSV" functionality with "Export Topic". This new
+        feature exports the question and answer text for the currently selected
+        topic into a plain‑text file. Each flashcard is enumerated (1., 2., 3., …)
+        followed by its question, a newline, and the answer. The filename is
+        derived from the topic name.
+      • Move the view selection buttons (Remaining / Seen / Mastered / Random)
+        from the top bar into the topic drawer. This tucks them away alongside
+        the topic list, reducing clutter in the top bar.
+      • Improve the card number “jump” control so that changing the number
+        immediately navigates to the specified card without requiring the user
+        to press Enter. This makes it easier to use on touch devices.
   -->
   <style>
     :root {
@@ -267,24 +280,27 @@
   <div id="topicDrawer" class="topic-drawer">
     <h4>Topics</h4>
     <div id="topicList"></div>
-  </div>
-  <div class="topbar">
-    <button id="drawerToggle" class="drawer-toggle" title="Toggle topics">☰</button>
-    <div class="left-actions">
-      <button onclick="fileInput.click()">Import</button>
-      <button onclick="exportJSON()">Export JSON</button>
-      <button onclick="exportCSV()">Export CSV</button>
-      <button onclick="openModal()">Add</button>
-      <button onclick="editCard()">Edit</button>
-      <!-- Removed Shuffle button as shuffling the deck interferes with state -->
-      <button onclick="syncTopicPrompt()">Sync Topic</button>
-    </div>
+    <!-- Added view selection buttons inside the topic drawer -->
+    <h4 style="margin-top:16px;">Views</h4>
     <div class="views" id="views">
       <button id="tab-remaining" class="active" onclick="setView('remaining')">Remaining <span id="ct-remaining">0</span></button>
       <button id="tab-seen" onclick="setView('seen')">Seen <span id="ct-seen">0</span></button>
       <button id="tab-mastered" onclick="setView('mastered')">Mastered <span id="ct-mastered">0</span></button>
       <button id="tab-random" onclick="setView('random')">Random <span id="ct-random">0</span></button>
     </div>
+  </div>
+  <div class="topbar">
+    <button id="drawerToggle" class="drawer-toggle" title="Toggle topics">☰</button>
+    <div class="left-actions">
+      <button onclick="fileInput.click()">Import</button>
+      <button onclick="exportJSON()">Export JSON</button>
+      <button onclick="exportTopic()">Export Topic</button>
+      <button onclick="openModal()">Add</button>
+      <button onclick="editCard()">Edit</button>
+      <!-- Removed Shuffle button as shuffling the deck interferes with state -->
+      <button onclick="syncTopicPrompt()">Sync Topic</button>
+    </div>
+    <!-- Removed views buttons from top bar; they now reside in the topic drawer -->
     <div class="counter">
       <button id="overflowBtn" title="More" onclick="toggleOverflow()">⋮</button>
       <div id="overflowMenu">
@@ -292,12 +308,12 @@
         <button onclick="editCard(); toggleOverflow(true)">Edit</button>
         <button onclick="fileInput.click(); toggleOverflow(true)">Import</button>
         <button onclick="exportJSON(); toggleOverflow(true)">Export JSON</button>
-        <button onclick="exportCSV(); toggleOverflow(true)">Export CSV</button>
+        <button onclick="exportTopic(); toggleOverflow(true)">Export Topic</button>
         <button onclick="openCamHelp(); toggleOverflow(true)">Camera help</button>
         <!-- Removed Shuffle from overflow menu -->
         <button onclick="syncTopicPrompt(); toggleOverflow(true)">Sync Topic</button>
       </div>
-      <input id="jump" type="number" min="1" value="1" onkeydown="handleJump(event)"><span class="slash">&nbsp;/&nbsp;</span><span id="total" class="total">0</span>
+      <input id="jump" type="number" min="1" value="1"><span class="slash">&nbsp;/&nbsp;</span><span id="total" class="total">0</span>
     </div>
   </div>
   <div class="filter-bar">
@@ -556,7 +572,8 @@
       const randCtEl = document.getElementById('ct-random');
       if(randCtEl) randCtEl.textContent = randList.length;
       document.getElementById('total').textContent = activeList().length;
-      document.getElementById('jump').value = activeList().length ? current+1 : 0;
+      const jumpInput = document.getElementById('jump');
+      if(jumpInput) jumpInput.value = activeList().length ? current+1 : 0;
       // update topic drawer list
       updateTopicDrawer();
     }
@@ -878,25 +895,41 @@
     const EXPORT_EXT = '.json';
     function exportJSON(){ const data = { cards, seen, mastered }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'flashcards' + EXPORT_EXT; a.click(); URL.revokeObjectURL(url); }
 
-    /* Export CSV for Google Sheets */
-    function exportCSV(){
-      const headers = ['Topic','Question','Answer','Colour','QImage','AImage'];
-      const rows = [headers];
-      cards.forEach(c => {
-        rows.push([
-          (c.topic || '').replace(/"/g,'""'),
-          (c.q || '').replace(/"/g,'""'),
-          (c.a || '').replace(/"/g,'""'),
-          (c.color || '').replace(/"/g,'""'),
-          (c.qImg || '').replace(/"/g,'""'),
-          (c.aImg || '').replace(/"/g,'""')
-        ]);
+    /* Export Topic as plain text */
+    function exportTopic(){
+      const topic = topicFilter;
+      if(!topic){
+        alert('Please select a topic to export.');
+        return;
+      }
+      // gather all cards across unmastered and mastered
+      const allCards = cards.concat(mastered);
+      const filteredCards = allCards.filter(c => c.topic === topic);
+      if(filteredCards.length === 0){
+        alert('No cards found for selected topic');
+        return;
+      }
+      const lines = [];
+      filteredCards.forEach((card, idx) => {
+        // convert rich HTML to plain text
+        const tmp = document.createElement('div');
+        tmp.innerHTML = card.q || '';
+        const qText = (tmp.textContent || tmp.innerText || '').trim();
+        tmp.innerHTML = card.a || '';
+        const aText = (tmp.textContent || tmp.innerText || '').trim();
+        lines.push((idx + 1) + '. ' + qText + '\n' + aText);
       });
-      const csv = rows.map(r => r.map(val => `"${val}"`).join(',')).join('\n');
-      const blob = new Blob([csv], { type: 'text/csv' });
+      const content = lines.join('\n\n');
+      const blob = new Blob([content], { type: 'text/plain' });
+      // sanitise file name
+      const safe = topic.replace(/[^a-zA-Z0-9_-]/g, '_') || 'topic';
+      const filename = safe + '.txt';
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
-      a.href = url; a.download = 'flashcards.csv'; a.click(); URL.revokeObjectURL(url);
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
     }
 
     /* Import cards file */
@@ -908,6 +941,8 @@
     function fmt(cmd){ document.execCommand(cmd, false, null); }
     function setColor(c){ document.execCommand('foreColor', false, c); }
     function setSize(s){ if(s) document.execCommand('fontSize', false, s); }
+
+    /* Handle jump input on Enter key (legacy) */
     function handleJump(e){ if(e.key !== 'Enter') return; const list = activeList(); const n = parseInt(e.target.value,10); if(!isNaN(n) && n>=1 && n<=list.length){ current=n-1; hideAnswer(); } else { e.target.select(); } }
 
     /* View switching */
@@ -931,7 +966,7 @@
     }
 
     /* Shuffle deck temporarily */
-    // The shuffle functionality is no longer exposed via the UI because random order can be achieved by the 'Random' tab.
+    // The shuffle functionality is no longer exposed via the UI because random order can still be achieved via the 'Random' view.
     function shuffleDeck(){
       // shuffle remaining cards only
       cards = shuffle(cards.slice());
@@ -1131,11 +1166,11 @@ cards = Array.isArray(data.cards) ? data.cards : data;            seen = Array.i
           // Parse CSV: assume first row header, fields separated by comma with optional quotes
           const lines = content.trim().split(/\r?\n/);
           if(lines.length < 2){ throw new Error('CSV does not contain any data'); }
-          const header = lines.shift().split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(h => h.replace(/"/g,'').trim());
+          const header = lines.shift().split(/,(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)/).map(h => h.replace(/"/g,'').trim());
           cardsToSync = [];
           lines.forEach(row => {
             // split by comma not inside quotes
-            const values = row.split(/,(?=(?:[^"]*"[^"]*")*[^"]*$)/).map(val => val.replace(/^"|"$/g,'').replace(/""/g,'"'));
+            const values = row.split(/,(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)/).map(val => val.replace(/^\"|\"$/g,'').replace(/\"\"/g,'\"'));
             const obj = {};
             header.forEach((h, i) => {
               obj[h] = values[i] || '';
@@ -1222,6 +1257,19 @@ cards = Array.isArray(data.cards) ? data.cards : data;            seen = Array.i
       updateTopicDrawer();
       setView(view);
       render();
+
+      // Jump input should update immediately when changed
+      const jumpInputEl = document.getElementById('jump');
+      if(jumpInputEl){
+        jumpInputEl.addEventListener('input', (ev) => {
+          const list = activeList();
+          const n = parseInt(ev.target.value, 10);
+          if(!isNaN(n) && n >= 1 && n <= list.length){
+            current = n - 1;
+            hideAnswer();
+          }
+        });
+      }
     });
 
   </script>
