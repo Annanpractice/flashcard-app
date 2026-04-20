@@ -230,6 +230,26 @@
       margin-right:8px;
     }
 
+function undoDelete(){
+  if(!lastDeleted) return;
+
+  const { card, from, index } = lastDeleted;
+
+  if(from === 'understood'){
+    understood.splice(Math.min(index, understood.length), 0, card);
+  } else if(from === 'mastered'){
+    mastered.splice(Math.min(index, mastered.length), 0, card);
+  } else {
+    cards.splice(Math.min(index, cards.length), 0, card);
+  }
+
+  lastDeleted = null;
+  hideAnswer();
+  saveState();
+}
+
+
+
     /* Modal and drawing styles remain mostly unchanged */
     .modal { position: fixed; inset: 0; background: rgba(0,0,0,.65); display:none; align-items:center; justify-content:center; z-index: 20; }
     .modal-content { background:#fff; color:#111; width:min(92vw, 860px); max-height: 92vh; overflow:auto; border-radius: 14px; padding: 16px; }
@@ -281,13 +301,7 @@
     <h4>Topics</h4>
     <div id="topicList"></div>
     <!-- Added view selection buttons inside the topic drawer -->
-    <h4 style="margin-top:16px;">Views</h4>
-    <div class="views" id="views">
-      <button id="tab-remaining" class="active" onclick="setView('remaining')">Remaining <span id="ct-remaining">0</span></button>
-      <button id="tab-seen" onclick="setView('seen')">Seen <span id="ct-seen">0</span></button>
-      <button id="tab-mastered" onclick="setView('mastered')">Mastered <span id="ct-mastered">0</span></button>
-      <button id="tab-random" onclick="setView('random')">Random <span id="ct-random">0</span></button>
-    </div>
+    
   </div>
   <div class="topbar">
     <button id="drawerToggle" class="drawer-toggle" title="Toggle topics">☰</button>
@@ -340,10 +354,11 @@
   <button class="arrow right" title="Next card">&#x25B6;</button>
 
   <div class="bottombar">
-    <button class="mark" onclick="markMastered()">Mark Mastered</button>
-    <button class="del"  onclick="deleteCard()">Delete</button>
-    <button class="undo" onclick="undoDelete()">Undo</button>
-  </div>
+  <button class="mark" onclick="markUnderstood()">Understood</button>
+  <button class="mark" onclick="markMastered()">Mastered</button>
+  <button class="del"  onclick="deleteCard()">Delete</button>
+  <button class="undo" onclick="undoDelete()">Undo</button>
+</div>
 
   <!-- Add/Edit Modal -->
   <div class="modal" id="modal">
@@ -527,13 +542,13 @@ async function loadDeckFromIndexedDB() {
   });
 }
     let cards = [];
+let understood = [];
 let mastered = [];
-let seen = [];
 
 try {
   cards = JSON.parse(localStorage.getItem('flashcards') || '[]');
-  mastered = JSON.parse(localStorage.getItem('masteredCards') || '[]');
-  seen = JSON.parse(localStorage.getItem('seenCards') || '[]');
+understood = JSON.parse(localStorage.getItem('understoodCards') || '[]');
+mastered = JSON.parse(localStorage.getItem('masteredCards') || '[]');
 } catch (err) {
   console.warn('localStorage load skipped:', err);
   cards = [];
@@ -549,7 +564,7 @@ try {
         if(c.topic === undefined) c.topic = '';
       });
     };
-    ensureIds(cards); ensureIds(mastered); ensureIds(seen);
+    ensureIds(cards); ensureIds(understood); ensureIds(mastered);
 
     /* Colour palette for new cards */
     const COLOURS = ['#FFEBEE','#E8F5E9','#E3F2FD','#FFFDE7','#F3E5F5','#EFEBE9','#E8EAF6','#FBE9E7','#ECEFF1'];
@@ -561,9 +576,9 @@ try {
     let keywordFilter = '';
     let keywordEnabled = false;
 
-    let current = 0, showingAnswer = false, locked = false, view = 'remaining';
-    let lastDeleted = null, editingIndex = null;
-    let randomOrder = [];
+    let current = 0, showingAnswer = false, locked = false;
+let deckFilter = 'remaining'; // 'all' | 'remaining' | 'understood' | 'mastered'
+let lastDeleted = null, editingIndex = null;
 
     // Drawing variables
     let drawTarget = null, drawCanvas, drawCtx, drawing=false, strokes=[], stroke=null, isErasing=false;
@@ -577,8 +592,8 @@ try {
    function saveState(){
   try {
     localStorage.setItem('flashcards', JSON.stringify(cards));
+    localStorage.setItem('understoodCards', JSON.stringify(understood));
     localStorage.setItem('masteredCards', JSON.stringify(mastered));
-    localStorage.setItem('seenCards', JSON.stringify(seen));
   } catch (err) {
     console.warn('localStorage save skipped:', err);
   }
@@ -595,39 +610,42 @@ try {
 
     /* Compute list for display taking into account view and filters */
     function activeList(){
-      if(view === 'random'){
-        return randomOrder;
-      }
-      let base = view === 'mastered' ? mastered : (view === 'seen' ? seen : cards);
-      let list = base;
-      if(topicFilter) list = list.filter(c => c.topic === topicFilter);
-      if(keywordEnabled && keywordFilter){
-        const kw = keywordFilter.toLowerCase();
-        list = list.filter(c => ((c.q && c.q.toLowerCase().includes(kw)) || (c.a && c.a.toLowerCase().includes(kw)) || (c.topic && c.topic.toLowerCase().includes(kw))));
-      }
-      return list;
-    }
+  let base;
+  if(deckFilter === 'all'){
+    base = cards.concat(understood, mastered);
+  } else if(deckFilter === 'understood'){
+    base = understood;
+  } else if(deckFilter === 'mastered'){
+    base = mastered;
+  } else {
+    base = cards; // remaining
+  }
+
+  let list = base;
+
+  if(topicFilter){
+    list = list.filter(c => c.topic === topicFilter);
+  }
+
+  if(keywordEnabled && keywordFilter){
+    const kw = keywordFilter.toLowerCase();
+    list = list.filter(c =>
+      (c.q && c.q.toLowerCase().includes(kw)) ||
+      (c.a && c.a.toLowerCase().includes(kw)) ||
+      (c.topic && c.topic.toLowerCase().includes(kw))
+    );
+  }
+
+  return list;
+}
 
     /* Update counts displayed in the UI */
     function updateCounts(){
-      document.getElementById('ct-remaining').textContent = cards.length;
-      document.getElementById('ct-seen').textContent = seen.length;
-      document.getElementById('ct-mastered').textContent = mastered.length;
-      // compute random count based on filters for remaining
-      let randList = cards;
-      if(topicFilter) randList = randList.filter(c => c.topic === topicFilter);
-      if(keywordEnabled && keywordFilter){
-        const kw = keywordFilter.toLowerCase();
-        randList = randList.filter(c => ((c.q && c.q.toLowerCase().includes(kw)) || (c.a && c.a.toLowerCase().includes(kw)) || (c.topic && c.topic.toLowerCase().includes(kw))));
-      }
-      const randCtEl = document.getElementById('ct-random');
-      if(randCtEl) randCtEl.textContent = randList.length;
-      document.getElementById('total').textContent = activeList().length;
-      const jumpInput = document.getElementById('jump');
-      if(jumpInput) jumpInput.value = activeList().length ? current+1 : 0;
-      // update topic drawer list
-      updateTopicDrawer();
-    }
+  document.getElementById('total').textContent = activeList().length;
+  const jumpInput = document.getElementById('jump');
+  if(jumpInput) jumpInput.value = activeList().length ? current + 1 : 0;
+  updateTopicDrawer();
+}
 
     /* Toggle overflow menu */
     function toggleOverflow(forceClose){
@@ -672,7 +690,9 @@ try {
         inner.classList.remove('flipped'); updateCounts(); return;
       }
       const card = list[current];
-      const prefix = view === 'mastered' ? '<em>(Mastered)</em><br>' : (view === 'seen' ? '<em>(Seen)</em><br>' : '');
+      let prefix = '';
+if(deckFilter === 'understood') prefix = '<em>(Understood)</em><br>';
+if(deckFilter === 'mastered') prefix = '<em>(Mastered)</em><br>';
       let qHtml = prefix + (card.q || '');
       const qImage = card.qImg; if(qImage) qHtml += `<br><img src="${qImage}">`;
       let aHtml = prefix + (card.a || '');
@@ -690,99 +710,154 @@ try {
 
     /* Update topic list drawer */
     function updateTopicDrawer(){
-      const listEl = document.getElementById('topicList');
-      if(!listEl) return;
-      // collect unique topics from all cards
-      const allCards = cards.concat(seen).concat(mastered);
-      const topics = Array.from(new Set(allCards.map(c => c.topic || '').filter(t => t)));
-      listEl.innerHTML = '';
-      // 'All' option
-      const allDiv = document.createElement('div');
-      allDiv.className = 'topic-item' + (topicFilter===null ? ' active' : '');
-      const allRibbon = document.createElement('div');
-      allRibbon.className = 'ribbon';
-      allRibbon.style.background = '#888';
-      allDiv.appendChild(allRibbon);
-      const allSpan = document.createElement('span'); allSpan.textContent = 'All';
-      allDiv.appendChild(allSpan);
-      allDiv.onclick = () => { topicFilter=null; toggleDrawer(true); hideAnswer(); setView(view); };
-      listEl.appendChild(allDiv);
-      topics.forEach(t => {
-        // find a card to get its colour
-        const sample = allCards.find(c => c.topic === t);
-        const colour = sample && sample.color ? sample.color : '#f7f9ff';
-        const div = document.createElement('div');
-        div.className = 'topic-item' + (topicFilter===t ? ' active' : '');
-        const ribbon = document.createElement('div');
-        ribbon.className = 'ribbon';
-        ribbon.style.background = colour;
-        div.appendChild(ribbon);
-        const span = document.createElement('span'); span.textContent = t;
-        div.appendChild(span);
-        div.onclick = () => { topicFilter = t; toggleDrawer(true); hideAnswer(); setView(view); };
-        listEl.appendChild(div);
-      });
-    }
+  const listEl = document.getElementById('topicList');
+  if(!listEl) return;
+
+  const allCards = cards.concat(understood, mastered);
+
+  // topic list should usually reflect the current deck filter
+  let topicSource;
+  if(deckFilter === 'all') topicSource = allCards;
+  else if(deckFilter === 'understood') topicSource = understood;
+  else if(deckFilter === 'mastered') topicSource = mastered;
+  else topicSource = cards;
+
+  const topics = Array.from(
+    new Set(topicSource.map(c => c.topic || '').filter(t => t))
+  ).sort();
+
+  listEl.innerHTML = '';
+
+  function addItem(label, active, onClick, colour = '#888'){
+    const div = document.createElement('div');
+    div.className = 'topic-item' + (active ? ' active' : '');
+
+    const ribbon = document.createElement('div');
+    ribbon.className = 'ribbon';
+    ribbon.style.background = colour;
+    div.appendChild(ribbon);
+
+    const span = document.createElement('span');
+    span.textContent = label;
+    div.appendChild(span);
+
+    div.onclick = onClick;
+    listEl.appendChild(div);
+  }
+
+  addItem('All', deckFilter === 'all' && topicFilter === null, () => {
+    deckFilter = 'all';
+    topicFilter = null;
+    current = 0;
+    toggleDrawer(true);
+    hideAnswer();
+  }, '#888');
+
+  addItem('Remaining', deckFilter === 'remaining' && topicFilter === null, () => {
+    deckFilter = 'remaining';
+    topicFilter = null;
+    current = 0;
+    toggleDrawer(true);
+    hideAnswer();
+  }, '#4caf50');
+
+  addItem('Understood', deckFilter === 'understood' && topicFilter === null, () => {
+    deckFilter = 'understood';
+    topicFilter = null;
+    current = 0;
+    toggleDrawer(true);
+    hideAnswer();
+  }, '#2196f3');
+
+  addItem('Mastered', deckFilter === 'mastered' && topicFilter === null, () => {
+    deckFilter = 'mastered';
+    topicFilter = null;
+    current = 0;
+    toggleDrawer(true);
+    hideAnswer();
+  }, '#9c27b0');
+
+  topics.forEach(t => {
+    const sample = topicSource.find(c => c.topic === t) || allCards.find(c => c.topic === t);
+    const colour = sample?.color || '#f7f9ff';
+
+    addItem(t, topicFilter === t, () => {
+      topicFilter = t;
+      current = 0;
+      toggleDrawer(true);
+      hideAnswer();
+    }, colour);
+  });
+}
 
     /* Show next/previous card */
     function nextCard(){ const list = activeList(); if(!list.length) return; current = (current + 1) % list.length; hideAnswer(); }
     function prevCard(){ const list = activeList(); if(!list.length) return; current = (current - 1 + list.length) % list.length; hideAnswer(); }
 
     let startX = null;
-    function showAnswer(){ showingAnswer = true; render(); maybeAddToSeen(); }
+    function showAnswer(){ showingAnswer = true; render(); }
     function hideAnswer(){ showingAnswer = false; locked = false; render(); }
     function unlockAnswer(){ locked = false; hideAnswer(); }
     function onDown(e){ startX = (e.touches? e.touches[0].clientX : e.clientX); showAnswer(); }
     function onMove(e){ if(startX==null) return; const x = (e.touches? e.touches[0].clientX : e.clientX); if(x - startX > 70){ locked = true; document.getElementById('lockPill').style.display = 'block'; } }
     function onUp(){ if(!locked) hideAnswer(); startX = null; }
 
-    /* Mark card as seen when answer shown */
-    function maybeAddToSeen(){
-      const list = activeList();
-      if(list.length){
-        const card = list[current];
-        const already = seen.some(c => c.id === card.id);
-        const inRemaining = cards.some(c => c.id === card.id);
-        const inMastered  = mastered.some(c => c.id === card.id);
-        if(inRemaining && !inMastered && !already){ seen.push(card); saveState(); updateCounts(); }
-      }
-    }
+    /* Mark card as understood when answer shown */
+    function markUnderstood(){
+  const list = activeList();
+  if(!list.length) return;
+
+  const card = list[current];
+
+  // only move from Remaining to Understood
+  if(cards.some(c => c.id === card.id)){
+    cards = cards.filter(c => c.id !== card.id);
+    if(!understood.some(c => c.id === card.id)) understood.push(card);
+  }
+
+  if(current >= activeList().length) current = 0;
+  hideAnswer();
+  saveState();
+}
 
     /* Mark card as mastered */
     function markMastered(){
-      const list = activeList(); if(!list.length) return;
-      const card = list[current];
-      if(!mastered.some(c => c.id === card.id)) mastered.push(card);
-      // remove from cards and seen
-      cards = cards.filter(c => c.id !== card.id);
-      seen  = seen.filter(c => c.id !== card.id);
-      if(current >= activeList().length) current = 0;
-      hideAnswer(); saveState();
-    }
+  const list = activeList();
+  if(!list.length) return;
+
+  const card = list[current];
+
+  if(!mastered.some(c => c.id === card.id)) mastered.push(card);
+
+  cards = cards.filter(c => c.id !== card.id);
+  understood = understood.filter(c => c.id !== card.id);
+
+  if(current >= activeList().length) current = 0;
+  hideAnswer();
+  saveState();
+}
 
     /* Delete card */
     function deleteCard(){
-      const list = activeList(); if(!list.length) return;
-      const card = list[current];
-      lastDeleted = { card: structuredClone(card), from: view, index: current };
-      if(view === 'remaining'){
-        cards = cards.filter(c => c.id !== card.id);
-        seen = seen.filter(c => c.id !== card.id);
-      }
-      else if(view === 'seen'){ seen = seen.filter(c => c.id !== card.id); }
-      else { mastered = mastered.filter(c => c.id !== card.id); }
-      if(current >= activeList().length) current = 0;
-      hideAnswer(); saveState();
-    }
+  const list = activeList();
+  if(!list.length) return;
 
-    /* Undo delete */
-    function undoDelete(){
-      if(!lastDeleted) return; const { card, from, index } = lastDeleted;
-      if(from === 'remaining'){ cards.splice(Math.min(index, cards.length), 0, card); }
-      else if(from === 'seen'){ if(cards.some(c => c.id === card.id)) seen.splice(Math.min(index, seen.length), 0, card); }
-      else { mastered.splice(Math.min(index, mastered.length), 0, card); }
-      lastDeleted = null; hideAnswer(); saveState();
-    }
+  const card = list[current];
+  let from = 'remaining';
+
+  if(understood.some(c => c.id === card.id)) from = 'understood';
+  else if(mastered.some(c => c.id === card.id)) from = 'mastered';
+
+  lastDeleted = { card: structuredClone(card), from, index: current };
+
+  cards = cards.filter(c => c.id !== card.id);
+  understood = understood.filter(c => c.id !== card.id);
+  mastered = mastered.filter(c => c.id !== card.id);
+
+  if(current >= activeList().length) current = 0;
+  hideAnswer();
+  saveState();
+}
 
     /* Modal open/close for adding/editing */
     function openModal(){
@@ -944,7 +1019,7 @@ try {
 
     /* Export JSON with progress saved */
     const EXPORT_EXT = '.json';
-    function exportJSON(){ const data = { cards, seen, mastered }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'flashcards' + EXPORT_EXT; a.click(); URL.revokeObjectURL(url); }
+    function exportJSON(){ const data = { cards, understood, mastered }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'flashcards' + EXPORT_EXT; a.click(); URL.revokeObjectURL(url); }
 
     /* Export Topic as plain text */
     function exportTopic(){
@@ -1005,9 +1080,10 @@ fileInput.addEventListener('change', async (e)=>{
       seen = seen.map(s=>map.get(bySig(s))||s); 
       mastered = mastered.map(m=>map.get(bySig(m))||m);
 
-      setView('remaining'); 
-      current=0; 
-      hideAnswer(); 
+      deckFilter = 'remaining';
+topicFilter = null;
+current = 0;
+hideAnswer(); 
       saveState(); 
       await saveDeckToIndexedDB({ cards, seen, mastered }); 
       alert('Deck saved to browser storage');
@@ -1028,44 +1104,10 @@ alert('Import failed: ' + (err && err.message ? err.message : err));    }
     /* Handle jump input on Enter key (legacy) */
     function handleJump(e){ if(e.key !== 'Enter') return; const list = activeList(); const n = parseInt(e.target.value,10); if(!isNaN(n) && n>=1 && n<=list.length){ current=n-1; hideAnswer(); } else { e.target.select(); } }
 
-    /* View switching */
-    function setView(v){
-      view = v;
-      document.querySelectorAll('.views button').forEach(b=>b.classList.remove('active'));
-      const tab = document.getElementById('tab-'+v);
-      if(tab) tab.classList.add('active');
-      current = 0;
-      if(v === 'random'){
-        // generate random order respecting filters
-        let list = cards.slice();
-        if(topicFilter) list = list.filter(c => c.topic === topicFilter);
-        if(keywordEnabled && keywordFilter){
-          const kw = keywordFilter.toLowerCase();
-          list = list.filter(c => ((c.q && c.q.toLowerCase().includes(kw)) || (c.a && c.a.toLowerCase().includes(kw)) || (c.topic && c.topic.toLowerCase().includes(kw))));
-        }
-        randomOrder = shuffle(list.slice());
-      }
-      hideAnswer();
-    }
 
     /* Shuffle deck temporarily */
     // The shuffle functionality is no longer exposed via the UI because random order can still be achieved via the 'Random' view.
-    function shuffleDeck(){
-      // shuffle remaining cards only
-      cards = shuffle(cards.slice());
-      hideAnswer();
-      if(view === 'random'){
-        // regenerate random order based on new order and filters
-        let list = cards.slice();
-        if(topicFilter) list = list.filter(c => c.topic === topicFilter);
-        if(keywordEnabled && keywordFilter){
-          const kw = keywordFilter.toLowerCase();
-          list = list.filter(c => ((c.q && c.q.toLowerCase().includes(kw)) || (c.a && c.a.toLowerCase().includes(kw)) || (c.topic && c.topic.toLowerCase().includes(kw))));
-        }
-        randomOrder = shuffle(list.slice());
-      }
-      render();
-    }
+    
 
     /* Drawer toggle */
     function toggleDrawer(forceClose){ const drawer = document.getElementById('topicDrawer'); if(!drawer) return; if(forceClose){ drawer.classList.remove('open'); return; } drawer.classList.toggle('open'); }
@@ -1228,9 +1270,10 @@ cards = Array.isArray(data.cards) ? data.cards : data;            seen = Array.i
       syncTopicWithServer(topic, filteredCards).then(() => {
         // After syncing, reload the deck from remote or local to reflect any changes
         loadDeck().then(() => {
-          setView('remaining');
-          current = 0;
-          hideAnswer();
+          deckFilter = 'remaining';
+topicFilter = null;
+current = 0;
+hideAnswer();
           alert('Topic synced successfully.');
         });
       }).catch(err => {
@@ -1299,9 +1342,10 @@ cards = Array.isArray(data.cards) ? data.cards : data;            seen = Array.i
         await syncTopicWithServer(topic, cardsToSync);
         // refresh deck after sync
         await loadDeck();
-        setView('remaining');
-        current = 0;
-        hideAnswer();
+        deckFilter = 'remaining';
+topicFilter = null;
+current = 0;
+hideAnswer();
         alert('Topic synced successfully.');
       } catch(err){
         console.error(err);
@@ -1327,6 +1371,14 @@ cards = Array.isArray(data.cards) ? data.cards : data;            seen = Array.i
       }
       // Optionally parse server response
     }
+
+
+function setDeckFilter(deck, topic=null){
+  deckFilter = deck;
+  topicFilter = topic;
+  current = 0;
+  hideAnswer();
+}
 
     /* Initialize app */
     window.addEventListener('load', async ()=>{
