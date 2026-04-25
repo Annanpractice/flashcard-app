@@ -1,378 +1,593 @@
+html
 <!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Flashcards — Remaining / Seen / Mastered / Random</title>
-  <!--
-    This file defines the client-side interface for the flashcard application.
-    It has been customised to support "topic level" synchronisation with the
-    backing Google Sheet via an Apps Script webapp. Unlike the previous version,
-    the sync workflow no longer requires uploading a JSON or CSV file for a topic.
-    Instead, the app filters the cards currently loaded in memory based on the
-    selected topic in the sidebar and sends only those cards to the Apps Script
-    endpoint. This allows a user to import a large deck once, then sync one topic
-    at a time without needing to prepare separate files for each topic.
-
-    Additional changes:
-      • Added a "Sync Topic" button in the top bar and overflow menu. When
-        clicked it gathers the cards for the currently selected topic (based on
-        the sidebar filter) and sends them to the Apps Script endpoint. The
-        script then replaces only the rows belonging to that topic, leaving
-        other topics untouched.
-      • Included a guard to display a message if the selected topic has no cards,
-        preventing accidental deletion of topics in the sheet by sending an empty list.
-      • The legacy file-based sync remains in the code (using the hidden file
-        input and its change handler) but is no longer triggered by the Sync Topic
-        button. Users can still manually select a file using the hidden input if needed.
-      • Removed the shuffle option from both the visible button bar and
-        overflow menu, as shuffling the underlying arrays interferes with
-        state management. Random order can still be achieved via the
-        "Random" tab.
-
-    The file has been further customised to:
-      • Replace the "Export CSV" functionality with "Export Topic". This new
-        feature exports the question and answer text for the currently selected
-        topic into a plain‑text file. Each flashcard is enumerated (1., 2., 3., …)
-        followed by its question, a newline, and the answer. The filename is
-        derived from the topic name.
-      • Move the view selection buttons (Remaining / Seen / Mastered / Random)
-        from the top bar into the topic drawer. This tucks them away alongside
-        the topic list, reducing clutter in the top bar.
-      • Improve the card number “jump” control so that changing the number
-        immediately navigates to the specified card without requiring the user
-        to press Enter. This makes it easier to use on touch devices.
-  -->
+  <title>Flashcards</title>
   <style>
-    :root {
-      --bg: #0e1222;
-      --panel: #161b2e;
-      --text: #f4f6fb;
-      --muted: #c5cbe0;
-      --accent: #005eb8;
-      --accent-2: #0072ce;
-      --good: #2dbf6e;
-      --warn: #f1c40f;
-      --bad: #e74c3c;
-      --shadow: 0 10px 30px rgba(0,0,0,.35);
-      --safe-bottom: env(safe-area-inset-bottom);
-      --safe-right: env(safe-area-inset-right);
-    }
-    html, body { height: 100%; }
-    body {
-      margin: 0;
-      font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-      background: linear-gradient(180deg, #0b1330 0%, #0e1222 60%);
-      color: var(--text);
-      -webkit-tap-highlight-color: transparent;
+    :root{
+      --bg:#0e1222;
+      --panel:#161b2e;
+      --panel2:#202842;
+      --text:#f4f6fb;
+      --muted:#c5cbe0;
+      --accent:#0072ce;
+      --accent2:#005eb8;
+      --good:#2dbf6e;
+      --warn:#f1c40f;
+      --bad:#e74c3c;
+      --shadow:0 10px 30px rgba(0,0,0,.35);
+      --safe-bottom:env(safe-area-inset-bottom);
+      --safe-right:env(safe-area-inset-right);
     }
 
-    /* Top bar and controls */
-    .topbar {
-      position: fixed; inset: 0 0 auto 0;
-      display: grid;
-      grid-template-columns: auto auto 1fr auto;
-      gap: 12px; align-items: center;
-      padding: 8px 12px;
-      padding-right: calc(12px + var(--safe-right));
-      background: rgba(7,10,24,.65);
-      backdrop-filter: blur(8px);
-      z-index: 12;
-    }
-    .drawer-toggle {
-      background: transparent;
-      border: none;
-      color: var(--text);
-      font-size: 24px;
-      cursor: pointer;
-      width: 32px;
-      height: 32px;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .drawer-toggle:hover { color: var(--accent); }
-    .left-actions { display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; }
-    .left-actions button { background:#fff; color:#000; border:none; border-radius:10px; padding:6px 10px; cursor:pointer; font-size:14px; white-space:nowrap; }
-
-    .views { display:flex; gap:6px; background: rgba(255,255,255,.06); padding:4px; border-radius: 999px; border:1px solid rgba(255,255,255,.12); }
-    .views button { background: transparent; color: var(--muted); border:none; cursor:pointer; padding:6px 10px; border-radius:999px; font-weight:700; font-size: 13px; }
-    .views button.active { background: var(--accent); color:#fff; }
-
-    /* Counter pill (top-right), compact & non-clipping */
-    .counter {
-      justify-self: end; display:flex; align-items:center; gap:6px;
-      color: var(--text);
-      background: rgba(255,255,255,.08);
-      border: 1px solid rgba(255,255,255,.18);
-      border-radius: 999px;
-      padding: 4px 8px;
-      white-space: nowrap;
-      max-width: 44vw;
-      overflow: visible;
-    }
-    .counter input{
-      flex: 0 1 48px;
-      width: 48px; text-align:center;
-      background: transparent; border:1px solid #4a5276;
-      border-radius: 8px; color: var(--text); padding:2px 4px;
-      font-weight: 700;
-    }
-    .counter input::-webkit-outer-spin-button,
-    .counter input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
-    .counter .slash { opacity:.8; }
-    .counter .total { min-width: 1ch; color: var(--muted); font-weight:700; }
-
-    #overflowBtn { display:none; background:#fff; color:#000; border:none; border-radius:10px; padding:6px 10px; cursor:pointer; font-size:16px; }
-    #overflowMenu { position: absolute; right: 8px; top: 48px; background:#fff; color:#111; border-radius:10px; box-shadow: var(--shadow); display:none; flex-direction:column; min-width: 200px; z-index: 50; }
-    #overflowMenu button { background:transparent; border:none; text-align:left; padding:10px 12px; cursor:pointer; }
-    #overflowMenu button:hover { background:#f0f4ff; }
-
-    @media (max-width: 720px){
-      .left-actions { display:none; }
-      #overflowBtn { display:inline-block; }
-      .topbar { grid-template-columns: auto 1fr auto; }
-      .topbar .views { justify-self: center; }
-      .counter { max-width: 50vw; }
-      .counter input{ flex-basis:44px; width:44px; }
-    }
-    @media (max-width: 380px){
-      .counter{ font-size: 12px; }
-      .counter input{ flex-basis:40px; width:40px; }
+    *{box-sizing:border-box}
+    html,body{height:100%}
+    body{
+      margin:0;
+      font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+      background:linear-gradient(180deg,#0b1330 0%,#0e1222 60%);
+      color:var(--text);
+      -webkit-tap-highlight-color:transparent;
     }
 
-    /* Filter bar for keyword search */
-    .filter-bar {
-      position: fixed; left:0; right:0; top:64px; /* below topbar */
-      display:flex; align-items:center; gap:10px;
-      padding: 8px 12px;
-      background: rgba(7,10,24,.65);
-      backdrop-filter: blur(8px);
-      z-index: 11;
+    button,input,textarea,select{font:inherit}
+
+    .topbar{
+      position:fixed;
+      inset:0 0 auto 0;
+      z-index:20;
+      display:grid;
+      grid-template-columns:auto 1fr auto;
+      gap:10px;
+      align-items:center;
+      padding:8px 12px;
+      padding-right:calc(12px + var(--safe-right));
+      background:rgba(7,10,24,.72);
+      backdrop-filter:blur(8px);
+      border-bottom:1px solid rgba(255,255,255,.08);
     }
-    .filter-bar input[type="text"] {
-      flex:1; min-width:0;
-      padding:6px 8px;
-      border-radius:8px;
-      border:1px solid #4a5276;
-      background: var(--panel);
-      color: var(--text);
+
+    .drawer-toggle{
+      width:36px;
+      height:36px;
+      display:grid;
+      place-items:center;
+      border:0;
+      border-radius:10px;
+      color:var(--text);
+      background:rgba(255,255,255,.08);
+      cursor:pointer;
+      font-size:22px;
     }
-    .filter-bar label {
-      display:flex; align-items:center; gap:4px;
-      font-size:14px;
+
+    .actions{
+      display:flex;
+      gap:8px;
+      overflow:auto;
+      padding-bottom:2px;
     }
-    .filter-bar input[type="checkbox"] { width:16px; height:16px; }
 
-    /* Wrapper and flashcard */
-    .wrap { margin: 128px auto 0; width: min(92vw, 760px); padding-bottom: 160px; }
-    .flashcard { position: relative; width: 100%; aspect-ratio: 4 / 3; color: #101321; border-radius: 18px; box-shadow: var(--shadow); overflow: hidden; perspective: 1000px; }
-    @media (max-width: 640px){ .wrap { margin-top: 136px; } .flashcard{ aspect-ratio: 3 / 4; } }
-    .card-inner { position:absolute; inset:0; transition: transform .5s; transform-style: preserve-3d; }
-    .card-inner.flipped { transform: rotateY(180deg); }
-    .panel { position:absolute; inset:0; padding: clamp(14px, 3vw, 28px); display:flex; align-items:center; justify-content:center; flex-direction:column; backface-visibility:hidden; overflow:auto; }
-    .front { /* background will be set via JS */ }
-    .back  { transform: rotateY(180deg); /* background set via JS */ }
-    .panel strong { font-size: clamp(18px, 2.1vw, 28px); }
-    .panel img { max-width: 90%; max-height: 90%; object-fit: contain; }
-
-    .show { display:block; margin: 14px auto 10px; padding: 12px 22px; font-size: 16px; font-weight: 800; border:none; border-radius: 999px; background: var(--accent-2); color:#fff; cursor:pointer; box-shadow: 0 6px 18px rgba(0,0,0,.25); user-select:none; -webkit-user-select:none; -webkit-touch-callout:none; }
-    #showBtn:focus { outline: none; }
-
-    .lock-pill { position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(92px + var(--safe-bottom)); background:#222; color:#fff; border:1px solid #444; border-radius: 999px; padding:8px 12px; font-weight:700; cursor:pointer; z-index: 9; display:none; }
-
-    .arrow { position: fixed; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border-radius: 50%; border:none; cursor:pointer; display:flex; align-items:center; justify-content:center; color:#fff; background: rgba(0,0,0,.32); box-shadow: 0 4px 16px rgba(0,0,0,.25); z-index: 5; user-select:none; -webkit-user-select:none; }
-    .arrow.left  { left: 8px; }
-    .arrow.right { right: 8px; }
-    @media (max-width: 480px){ .arrow{ width:34px; height:34px; } }
-
-    .bottombar { position: fixed; left: 0; right: 0; bottom: 0; display:flex; gap:10px; justify-content:center; align-items:center; padding: 12px 12px calc(12px + var(--safe-bottom)); background: rgba(7,10,24,.65); backdrop-filter: blur(8px); z-index: 8; }
-    .bottombar button { border:none; border-radius:12px; padding:10px 14px; font-weight:800; cursor:pointer; user-select:none; -webkit-user-select:none; }
-    .mark { background: var(--good); color:#fff; }
-    .del  { background: var(--bad);  color:#fff; }
-    .undo { background: var(--warn); color:#000; }
-
-    /* Topic drawer styles */
-    .topic-drawer {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 240px;
-      height: 100%;
-      background: var(--panel);
-      color: var(--text);
-      box-shadow: 2px 0 12px rgba(0,0,0,.4);
-      transform: translateX(-100%);
-      transition: transform 0.3s ease;
-      z-index: 14;
-      padding: 12px;
-      overflow-y: auto;
+    .actions button,.counter button,.menu button{
+      border:0;
+      border-radius:10px;
+      padding:7px 10px;
+      cursor:pointer;
+      white-space:nowrap;
     }
-    .topic-drawer.open { transform: translateX(0); }
-    .topic-drawer h4 {
-      margin: 4px 0 8px;
-      font-size: 18px;
-    }
-    .topic-item {
+
+    .actions button{background:#fff;color:#111}
+    .actions button.primary{background:var(--accent);color:#fff}
+
+    .counter{
+      position:relative;
       display:flex;
       align-items:center;
-      padding:6px;
-      border-radius:6px;
+      gap:6px;
+      background:rgba(255,255,255,.08);
+      border:1px solid rgba(255,255,255,.16);
+      border-radius:999px;
+      padding:4px 8px;
+      white-space:nowrap;
+    }
+
+    #jump{
+      width:52px;
+      text-align:center;
+      border:1px solid #4a5276;
+      border-radius:8px;
+      background:transparent;
+      color:var(--text);
+      font-weight:800;
+      padding:2px 4px;
+    }
+
+    #jump::-webkit-inner-spin-button,#jump::-webkit-outer-spin-button{
+      -webkit-appearance:none;
+      margin:0;
+    }
+
+    .menu-btn{
+      display:none;
+      background:#fff;
+      color:#111;
+      padding:5px 9px!important;
+    }
+
+    .menu{
+      position:absolute;
+      top:44px;
+      right:0;
+      min-width:210px;
+      display:none;
+      flex-direction:column;
+      overflow:hidden;
+      background:#fff;
+      color:#111;
+      border-radius:12px;
+      box-shadow:var(--shadow);
+      z-index:50;
+    }
+
+    .menu button{
+      background:#fff;
+      color:#111;
+      text-align:left;
+      border-radius:0;
+      padding:11px 13px;
+    }
+
+    .menu button:hover{background:#eef3ff}
+
+    .filterbar{
+      position:fixed;
+      top:54px;
+      left:0;
+      right:0;
+      z-index:19;
+      display:flex;
+      gap:10px;
+      align-items:center;
+      padding:8px 12px;
+      background:rgba(7,10,24,.72);
+      backdrop-filter:blur(8px);
+      border-bottom:1px solid rgba(255,255,255,.06);
+    }
+
+    .filterbar input[type=text]{
+      flex:1;
+      min-width:0;
+      padding:8px 10px;
+      border-radius:10px;
+      border:1px solid #4a5276;
+      background:var(--panel);
+      color:var(--text);
+    }
+
+    .filterbar label{
+      display:flex;
+      gap:5px;
+      align-items:center;
+      font-size:14px;
+      color:var(--muted);
+    }
+
+    .drawer{
+      position:fixed;
+      top:0;
+      left:0;
+      bottom:0;
+      width:285px;
+      z-index:40;
+      transform:translateX(-105%);
+      transition:transform .25s ease;
+      background:var(--panel);
+      color:var(--text);
+      box-shadow:2px 0 18px rgba(0,0,0,.45);
+      padding:14px;
+      overflow:auto;
+    }
+
+    .drawer.open{transform:translateX(0)}
+    .drawer h3{margin:0 0 12px}
+    .drawer small{color:var(--muted)}
+
+    .drawer-section{
+      margin:12px 0;
+      padding-top:12px;
+      border-top:1px solid rgba(255,255,255,.1);
+    }
+
+    .topic-item{
+      display:flex;
+      align-items:center;
+      gap:8px;
+      padding:8px;
+      border-radius:9px;
       cursor:pointer;
       margin-bottom:4px;
+      user-select:none;
     }
-    .topic-item:hover { background: rgba(255,255,255,.08); }
-    .topic-item.active { background: rgba(255,255,255,.12); }
-    .topic-item .ribbon {
+
+    .topic-item:hover{background:rgba(255,255,255,.08)}
+    .topic-item.active{background:rgba(0,114,206,.32)}
+    .ribbon{
       width:14px;
       height:14px;
-      border-radius:2px;
-      margin-right:8px;
+      border-radius:3px;
+      flex:0 0 auto;
+      background:#888;
     }
 
-function undoDelete(){
-  if(!lastDeleted) return;
+    .topic-name{
+      flex:1;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
 
-  const { card, from, index } = lastDeleted;
+    .badge{
+      font-size:12px;
+      color:var(--muted);
+      background:rgba(255,255,255,.08);
+      border-radius:999px;
+      padding:2px 7px;
+    }
 
-  if(from === 'understood'){
-    understood.splice(Math.min(index, understood.length), 0, card);
-  } else if(from === 'mastered'){
-    mastered.splice(Math.min(index, mastered.length), 0, card);
-  } else {
-    cards.splice(Math.min(index, cards.length), 0, card);
-  }
+    .wrap{
+      width:min(92vw,780px);
+      margin:124px auto 0;
+      padding-bottom:155px;
+    }
 
-  lastDeleted = null;
-  hideAnswer();
-  saveState();
-}
+    .flashcard{
+      position:relative;
+      width:100%;
+      aspect-ratio:4/3;
+      border-radius:20px;
+      overflow:hidden;
+      box-shadow:var(--shadow);
+      perspective:1000px;
+      color:#101321;
+    }
 
+    .card-inner{
+      position:absolute;
+      inset:0;
+      transition:transform .45s;
+      transform-style:preserve-3d;
+    }
 
+    .card-inner.flipped{transform:rotateY(180deg)}
 
-    /* Modal and drawing styles remain mostly unchanged */
-    .modal { position: fixed; inset: 0; background: rgba(0,0,0,.65); display:none; align-items:center; justify-content:center; z-index: 20; }
-    .modal-content { background:#fff; color:#111; width:min(92vw, 860px); max-height: 92vh; overflow:auto; border-radius: 14px; padding: 16px; }
-    .grid { display:grid; grid-template-columns: 1fr 1fr; gap: 18px; }
-    @media (max-width: 720px){ .grid { grid-template-columns: 1fr; } }
-    .toolbar { display:flex; align-items:center; gap:6px; margin-bottom:6px; }
-    .toolbar button{ background:#eef2ff; border:1px solid #cfd6ff; border-radius:8px; padding:6px 8px; cursor:pointer; }
-    .toolbar input[type=color], .toolbar select{ height:30px; border:1px solid #cfd6ff; border-radius:8px; }
-    .ed { border:1px solid #cfd6ff; border-radius:10px; min-height:110px; padding:10px; background:#fff; overflow:auto; }
-    .thumb { display:flex; align-items:center; gap:8px; margin-top:8px; }
-    .thumb img{ height:44px; width:auto; border:1px solid #ddd; border-radius:6px; }
-    .modal-content .primary{ background: var(--accent); color:#fff; border:none; border-radius:10px; padding:10px 12px; cursor:pointer; }
-    .modal-content .secondary{ background:#555; color:#fff; border:none; border-radius:10px; padding:10px 12px; cursor:pointer; }
+    .face{
+      position:absolute;
+      inset:0;
+      padding:clamp(16px,3vw,30px);
+      display:flex;
+      flex-direction:column;
+      justify-content:center;
+      align-items:center;
+      overflow:auto;
+      backface-visibility:hidden;
+      text-align:center;
+      line-height:1.35;
+    }
 
-    /* Colour picker styles */
-    .colour-options { display:flex; gap:8px; flex-wrap:wrap; margin-top:6px; }
-    .colour-opt {
-      width:24px;
-      height:24px;
-      border-radius:50%;
-      border:2px solid transparent;
+    .back{transform:rotateY(180deg)}
+    .face img{max-width:92%;max-height:65%;object-fit:contain;margin-top:12px;border-radius:8px}
+    .face.empty{color:#222;font-weight:800}
+
+    .topic-chip{
+      position:absolute;
+      top:10px;
+      left:10px;
+      z-index:3;
+      font-size:12px;
+      color:#111;
+      background:rgba(255,255,255,.65);
+      border-radius:999px;
+      padding:4px 9px;
+      max-width:75%;
+      overflow:hidden;
+      text-overflow:ellipsis;
+      white-space:nowrap;
+    }
+
+    .show{
+      display:block;
+      margin:16px auto 10px;
+      padding:12px 22px;
+      border:0;
+      border-radius:999px;
+      background:var(--accent);
+      color:#fff;
+      font-weight:900;
+      cursor:pointer;
+      box-shadow:0 6px 18px rgba(0,0,0,.25);
+      user-select:none;
+      -webkit-user-select:none;
+      -webkit-touch-callout:none;
+    }
+
+    .lock-pill{
+      position:fixed;
+      left:50%;
+      bottom:calc(92px + var(--safe-bottom));
+      transform:translateX(-50%);
+      z-index:15;
+      display:none;
+      border:1px solid #555;
+      border-radius:999px;
+      background:#222;
+      color:#fff;
+      padding:8px 12px;
+      font-weight:800;
       cursor:pointer;
     }
-    .colour-opt.selected { border-color: var(--accent); }
 
-    /* Custom input for topic */
-    .topic-input {
-      width:100%;
-      padding:6px 8px;
-      border-radius:8px;
-      border:1px solid #cfd6ff;
-      margin-top:6px;
+    .arrow{
+      position:fixed;
+      top:50%;
+      transform:translateY(-50%);
+      z-index:14;
+      width:42px;
+      height:42px;
+      display:grid;
+      place-items:center;
+      border:0;
+      border-radius:999px;
+      background:rgba(0,0,0,.35);
+      color:#fff;
+      cursor:pointer;
+      box-shadow:0 4px 16px rgba(0,0,0,.25);
+      user-select:none;
     }
 
-    .devsig {
-      position: fixed;
-      right: 10px;
-      bottom: calc(136px + var(--safe-bottom));
-      font-size: 12px;
-      color: var(--muted);
-      user-select: none;
-      pointer-events: none;
-      z-index: 7;
+    .arrow.left{left:8px}
+    .arrow.right{right:8px}
+
+    .bottombar{
+      position:fixed;
+      left:0;
+      right:0;
+      bottom:0;
+      z-index:18;
+      display:flex;
+      justify-content:center;
+      gap:10px;
+      padding:12px 12px calc(12px + var(--safe-bottom));
+      background:rgba(7,10,24,.72);
+      backdrop-filter:blur(8px);
+      border-top:1px solid rgba(255,255,255,.08);
+    }
+
+    .bottombar button{
+      border:0;
+      border-radius:12px;
+      padding:10px 14px;
+      font-weight:900;
+      cursor:pointer;
+    }
+
+    .good{background:var(--good);color:#fff}
+    .bad{background:var(--bad);color:#fff}
+    .warn{background:var(--warn);color:#111}
+
+    .modal{
+      position:fixed;
+      inset:0;
+      z-index:60;
+      display:none;
+      align-items:center;
+      justify-content:center;
+      padding:16px;
+      background:rgba(0,0,0,.65);
+    }
+
+    .modal.open{display:flex}
+
+    .modal-card{
+      width:min(94vw,900px);
+      max-height:92vh;
+      overflow:auto;
+      border-radius:16px;
+      background:#fff;
+      color:#111;
+      padding:16px;
+      box-shadow:var(--shadow);
+    }
+
+    .grid{
+      display:grid;
+      grid-template-columns:1fr 1fr;
+      gap:18px;
+    }
+
+    .ed{
+      min-height:130px;
+      border:1px solid #cfd6ff;
+      border-radius:10px;
+      padding:10px;
+      overflow:auto;
+      background:#fff;
+    }
+
+    .toolbar{
+      display:flex;
+      gap:6px;
+      align-items:center;
+      margin:6px 0;
+      flex-wrap:wrap;
+    }
+
+    .toolbar button,.modal-actions button{
+      border:0;
+      border-radius:9px;
+      padding:7px 9px;
+      cursor:pointer;
+    }
+
+    .toolbar button{background:#eef2ff;border:1px solid #cfd6ff}
+    .modal-actions{display:flex;gap:10px;justify-content:flex-end;margin-top:14px}
+    .primary{background:var(--accent)!important;color:#fff!important}
+    .secondary{background:#555!important;color:#fff!important}
+
+    .topic-input{
+      width:100%;
+      padding:8px 10px;
+      border-radius:10px;
+      border:1px solid #cfd6ff;
+      margin-top:5px;
+    }
+
+    .colour-options{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      margin:7px 0 12px;
+    }
+
+    .colour-opt{
+      width:26px;
+      height:26px;
+      border-radius:999px;
+      border:3px solid transparent;
+      cursor:pointer;
+    }
+
+    .colour-opt.selected{border-color:var(--accent)}
+
+    .thumb{
+      display:none;
+      align-items:center;
+      gap:8px;
+      margin:7px 0;
+    }
+
+    .thumb img{
+      max-height:54px;
+      border-radius:7px;
+      border:1px solid #ddd;
+    }
+
+    .devsig{
+      position:fixed;
+      right:10px;
+      bottom:calc(136px + var(--safe-bottom));
+      z-index:5;
+      color:var(--muted);
+      font-size:12px;
+      pointer-events:none;
+      user-select:none;
+    }
+
+    @media(max-width:760px){
+      .actions{display:none}
+      .menu-btn{display:inline-block}
+      .grid{grid-template-columns:1fr}
+      .wrap{margin-top:132px}
+      .flashcard{aspect-ratio:3/4}
+      .drawer{width:min(86vw,310px)}
+    }
+
+    @media(max-width:430px){
+      .filterbar{gap:6px}
+      .filterbar label{font-size:12px}
+      .counter{font-size:13px}
+      #jump{width:44px}
+      .bottombar{gap:6px}
+      .bottombar button{padding:9px 9px;font-size:13px}
+      .arrow{width:36px;height:36px}
     }
   </style>
 </head>
 <body>
-  <div id="topicDrawer" class="topic-drawer">
-    <h4>Topics</h4>
-    <div id="topicList"></div>
-    <!-- Added view selection buttons inside the topic drawer -->
-    
-  </div>
-  <div class="topbar">
-    <button id="drawerToggle" class="drawer-toggle" title="Toggle topics">☰</button>
-    <div class="left-actions">
+  <aside id="drawer" class="drawer">
+    <h3>Flashcards</h3>
+    <small id="deckSummary"></small>
+
+    <div class="drawer-section">
+      <strong>Views</strong>
+      <div id="viewList"></div>
+    </div>
+
+    <div class="drawer-section">
+      <strong>Topics</strong>
+      <div id="topicList"></div>
+    </div>
+  </aside>
+
+  <header class="topbar">
+    <button id="drawerToggle" class="drawer-toggle" title="Topics and views">☰</button>
+
+    <nav class="actions">
       <button onclick="fileInput.click()">Import</button>
       <button onclick="exportJSON()">Export JSON</button>
       <button onclick="exportTopic()">Export Topic</button>
       <button onclick="openModal()">Add</button>
-      <button onclick="editCard()">Edit</button>
-      <!-- Removed Shuffle button as shuffling the deck interferes with state -->
-      <button onclick="syncTopicPrompt()">Sync Topic</button>
-    </div>
-    <!-- Removed views buttons from top bar; they now reside in the topic drawer -->
+      <button onclick="editCurrent()">Edit</button>
+      <button class="primary" onclick="syncTopicPrompt()">Sync Topic</button>
+    </nav>
+
     <div class="counter">
-      <button id="overflowBtn" title="More" onclick="toggleOverflow()">⋮</button>
-      <div id="overflowMenu">
-        <button onclick="openModal(); toggleOverflow(true)">Add</button>
-        <button onclick="editCard(); toggleOverflow(true)">Edit</button>
-        <button onclick="fileInput.click(); toggleOverflow(true)">Import</button>
-        <button onclick="exportJSON(); toggleOverflow(true)">Export JSON</button>
-        <button onclick="exportTopic(); toggleOverflow(true)">Export Topic</button>
-        <button onclick="openCamHelp(); toggleOverflow(true)">Camera help</button>
-        <!-- Removed Shuffle from overflow menu -->
-        <button onclick="syncTopicPrompt(); toggleOverflow(true)">Sync Topic</button>
+      <button id="menuBtn" class="menu-btn" onclick="toggleMenu()">⋮</button>
+      <div id="menu" class="menu">
+        <button onclick="openModal();toggleMenu(true)">Add</button>
+        <button onclick="editCurrent();toggleMenu(true)">Edit</button>
+        <button onclick="fileInput.click();toggleMenu(true)">Import</button>
+        <button onclick="exportJSON();toggleMenu(true)">Export JSON</button>
+        <button onclick="exportTopic();toggleMenu(true)">Export Topic</button>
+        <button onclick="syncTopicPrompt();toggleMenu(true)">Sync Topic</button>
       </div>
-      <input id="jump" type="number" min="1" value="1"><span class="slash">&nbsp;/&nbsp;</span><span id="total" class="total">0</span>
+      <input id="jump" type="number" min="1" value="0" />
+      <span>/</span>
+      <strong id="total">0</strong>
     </div>
-  </div>
-  <div class="filter-bar">
-    <input id="keywordInput" type="text" placeholder="Keyword filter…" />
-    <label><input type="checkbox" id="keywordToggle"> Enable filter</label>
-  </div>
-  <input type="file" id="fileInput" accept=".json,.cards,application/json" hidden>
-  <!-- Dedicated file input for syncing a topic (legacy). The Sync Topic button now uses in-memory filtering. -->
-  <input type="file" id="syncInput" accept=".json,.csv,application/json,text/csv" hidden>
+  </header>
 
-  <div class="wrap">
-    <div id="card" class="flashcard">
-      <div class="card-inner" id="cardInner">
-        <div class="panel front" id="front"></div>
-        <div class="panel back"  id="back"></div>
+  <section class="filterbar">
+    <input id="keywordInput" type="text" placeholder="Keyword filter question, answer, or topic…" />
+    <label><input id="keywordToggle" type="checkbox" /> Enable</label>
+  </section>
+
+  <input id="fileInput" type="file" accept=".json,.cards,application/json" hidden />
+
+  <main class="wrap">
+    <section id="card" class="flashcard">
+      <div id="cardInner" class="card-inner">
+        <div id="front" class="face front"></div>
+        <div id="back" class="face back"></div>
       </div>
-    </div>
-    <button id="showBtn" class="show" title="Hold to show answer" oncontextmenu="return false">Hold to Show Answer</button>
+    </section>
+    <button id="showBtn" class="show" oncontextmenu="return false">Hold to Show Answer</button>
     <button id="lockPill" class="lock-pill" onclick="unlockAnswer()">Answer locked — tap to hide</button>
-  </div>
+  </main>
 
-  <!-- Arrows for navigation -->
-  <button class="arrow left"  title="Previous card">&#x25C0;</button>
-  <button class="arrow right" title="Next card">&#x25B6;</button>
+  <button class="arrow left" title="Previous">◀</button>
+  <button class="arrow right" title="Next">▶</button>
 
-  <div class="bottombar">
-  <button class="mark" onclick="markUnderstood()">Understood</button>
-  <button class="mark" onclick="markMastered()">Mastered</button>
-  <button class="del"  onclick="deleteCard()">Delete</button>
-  <button class="undo" onclick="undoDelete()">Undo</button>
-</div>
+  <footer class="bottombar">
+    <button class="good" onclick="markUnderstood()">Understood</button>
+    <button class="good" onclick="markMastered()">Mastered</button>
+    <button class="bad" onclick="deleteCurrent()">Delete</button>
+    <button class="warn" onclick="undoDelete()">Undo</button>
+  </footer>
 
-  <!-- Add/Edit Modal -->
-  <div class="modal" id="modal">
-    <div class="modal-content">
+  <div id="modal" class="modal">
+    <div class="modal-card">
       <h3 id="modalTitle">Add Flashcard</h3>
+
       <div class="grid">
         <section>
-          <label>Question</label>
+          <label><strong>Question</strong></label>
           <div class="toolbar">
             <button type="button" onclick="fmt('bold')"><b>B</b></button>
             <button type="button" onclick="fmt('italic')"><i>I</i></button>
             <button type="button" onclick="fmt('underline')"><u>U</u></button>
-            <input type="color" onchange="setColor(this.value)">
-            <select onchange="setSize(this.value)">
+            <input type="color" onchange="setTextColour(this.value)" />
+            <select onchange="setTextSize(this.value)">
               <option value="">Size</option>
               <option value="2">Small</option>
               <option value="3">Normal</option>
@@ -380,26 +595,23 @@ function undoDelete(){
               <option value="5">X-Large</option>
             </select>
           </div>
-          <div id="qEd" class="ed" contenteditable="true" data-placeholder="Enter question..."></div>
-          <label>Question Image (optional)</label>
-          <input type="file" id="qImg" accept="image/*">
-          <div class="thumb" id="qThumb" style="display:none">
-            <img id="qThumbImg" alt="Question image preview"/>
-            <button type="button" class="secondary" onclick="removeQImg()">Remove image</button>
-          </div>
-          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-            <button type="button" class="primary" onclick="openDrawing('q')">Draw / annotate (Question)</button>
-            <button type="button" class="secondary" onclick="cameraEntry('q')">Camera (Question)</button>
+          <div id="qEd" class="ed" contenteditable="true"></div>
+          <label>Question image</label>
+          <input id="qImg" type="file" accept="image/*" />
+          <div id="qThumb" class="thumb">
+            <img id="qThumbImg" alt="Question preview" />
+            <button type="button" onclick="setThumb('q',null)">Remove</button>
           </div>
         </section>
+
         <section>
-          <label>Answer</label>
+          <label><strong>Answer</strong></label>
           <div class="toolbar">
             <button type="button" onclick="fmt('bold')"><b>B</b></button>
             <button type="button" onclick="fmt('italic')"><i>I</i></button>
             <button type="button" onclick="fmt('underline')"><u>U</u></button>
-            <input type="color" onchange="setColor(this.value)">
-            <select onchange="setSize(this.value)">
+            <input type="color" onchange="setTextColour(this.value)" />
+            <select onchange="setTextSize(this.value)">
               <option value="">Size</option>
               <option value="2">Small</option>
               <option value="3">Normal</option>
@@ -407,86 +619,27 @@ function undoDelete(){
               <option value="5">X-Large</option>
             </select>
           </div>
-          <div id="aEd" class="ed" contenteditable="true" data-placeholder="Enter answer..."></div>
-          <label>Answer Image (optional)</label>
-          <input type="file" id="aImg" accept="image/*">
-          <div class="thumb" id="aThumb" style="display:none">
-            <img id="aThumbImg" alt="Answer image preview"/>
-            <button type="button" class="secondary" onclick="removeAImg()">Remove image</button>
-          </div>
-          <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap;">
-            <button type="button" class="primary" onclick="openDrawing('a')">Draw / annotate (Answer)</button>
-            <button type="button" class="secondary" onclick="cameraEntry('a')">Camera (Answer)</button>
+          <div id="aEd" class="ed" contenteditable="true"></div>
+          <label>Answer image</label>
+          <input id="aImg" type="file" accept="image/*" />
+          <div id="aThumb" class="thumb">
+            <img id="aThumbImg" alt="Answer preview" />
+            <button type="button" onclick="setThumb('a',null)">Remove</button>
           </div>
         </section>
       </div>
-      <!-- Colour and topic selection -->
-      <div style="margin-top:16px;">
-        <label>Card Colour</label>
+
+      <div style="margin-top:14px">
+        <label><strong>Card colour</strong></label>
         <div id="colourOptions" class="colour-options"></div>
-        <label style="margin-top:12px; display:block;">Topic</label>
-        <input id="topicInput" type="text" class="topic-input" placeholder="Enter topic (optional)">
+
+        <label><strong>Topic</strong></label>
+        <input id="topicInput" class="topic-input" type="text" placeholder="Optional topic" />
       </div>
-      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top: 12px;">
-        <!-- Save button triggers saveCard via global click handler -->
-        <button id="saveCardBtn" class="primary">Save</button>
+
+      <div class="modal-actions">
+        <button class="primary" onclick="saveCard()">Save</button>
         <button class="secondary" onclick="closeModal()">Cancel</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Hidden camera pickers (fallback when not secure) -->
-  <input type="file" id="qCam" accept="image/*" capture="environment" hidden>
-  <input type="file" id="aCam" accept="image/*" capture="environment" hidden>
-
-  <!-- Drawing Modal -->
-  <div class="modal" id="drawModal">
-    <div class="modal-content draw">
-      <h3>Draw / Annotate</h3>
-      <div class="draw-toolbar">
-        <label style="display:flex; align-items:center; gap:6px;">Colour
-          <input type="color" id="drawColor" value="#000000" onchange="syncDrawSettings()">
-        </label>
-        <label style="display:flex; align-items:center; gap:6px;">Thickness
-          <input type="range" id="drawThick" min="1" max="12" value="2" onchange="syncDrawSettings()" style="width:120px;">
-        </label>
-        <button id="eraserBtn" type="button" onclick="toggleEraser()">Eraser</button>
-        <button type="button" onclick="undoStroke()">Undo</button>
-        <label style="display:flex; align-items:center; gap:6px; margin-left:auto;">
-          <input type="checkbox" id="bgToggle" checked>
-          Use current image as background
-        </label>
-        <button class="primary" onclick="saveDrawing()">Save</button>
-        <button class="secondary" onclick="closeDrawing()">Cancel</button>
-      </div>
-      <canvas id="drawCanvas" width="640" height="400"></canvas>
-    </div>
-  </div>
-
-  <!-- Camera Modal -->
-  <div class="modal" id="cameraModal">
-    <div class="modal-content draw">
-      <h3>Take a photo</h3>
-      <div class="draw-toolbar">
-        <button type="button" id="switchCamBtn" onclick="switchCamera()">Switch camera</button>
-        <span id="camStatus" style="margin-left:auto;"></span>
-        <button class="primary" onclick="takePhoto()">Capture</button>
-        <button class="secondary" onclick="closeCamera()">Cancel</button>
-      </div>
-      <div style="position:relative; width:100%; max-height:70vh; overflow:hidden; border:1px solid #ddd; border-radius:10px; background:#000;">
-        <video id="cameraVideo" autoplay playsinline style="width:100%; height:auto; display:block; background:#000;"></video>
-      </div>
-      <canvas id="cameraCanvas" width="640" height="480" style="display:none;"></canvas>
-    </div>
-  </div>
-
-  <!-- Camera Help Modal -->
-  <div class="modal" id="camHelpModal">
-    <div class="modal-content draw">
-      <h3>Enable camera access</h3>
-      <div id="camHelpBody" style="line-height:1.4;"></div>
-      <div style="display:flex; gap:10px; justify-content:flex-end; margin-top: 12px;">
-        <button class="secondary" onclick="closeCamHelp()">Close</button>
       </div>
     </div>
   </div>
@@ -494,932 +647,927 @@ function undoDelete(){
   <div class="devsig">Developer: Iain Stewart ScotGEM 2025</div>
 
   <script>
-    // Delegate click for save button to handle cases where inline handler fails (e.g., overlay)
-    document.addEventListener('click', function(ev){
-      const target = ev.target;
-      if(!target) return;
-      const btn = target.closest && target.closest('#saveCardBtn');
-      if(btn){
-        ev.preventDefault();
-        saveCard();
-      }
-    });
-    /* Persistent card and progress storage */
-    // === IndexedDB (persistent large deck storage) ===
-function openDeckDB() {
-  return new Promise((resolve, reject) => {
-    const req = indexedDB.open('flashcardsDB', 1);
-    req.onupgradeneeded = (e) => {
-      const db = e.target.result;
-      if (!db.objectStoreNames.contains('decks')) {
-        db.createObjectStore('decks');
-      }
-    };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
-  });
-}
+    /***********************
+     * State
+     ***********************/
+    const DB_NAME = 'flashcardsDB';
+    const DB_STORE = 'decks';
+    const DB_KEY = 'mainDeck';
 
-async function saveDeckToIndexedDB(data) {
-  const db = await openDeckDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('decks', 'readwrite');
-    const store = tx.objectStore('decks');
-    store.put(data, 'mainDeck');
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-  });
-}
-
-async function loadDeckFromIndexedDB() {
-  const db = await openDeckDB();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction('decks', 'readonly');
-    const store = tx.objectStore('decks');
-    const req = store.get('mainDeck');
-    req.onsuccess = () => resolve(req.result || null);
-    req.onerror = () => reject(req.error);
-  });
-}
     let cards = [];
-let understood = [];
-let mastered = [];
+    let understood = [];
+    let mastered = [];
 
-try {
-  cards = JSON.parse(localStorage.getItem('flashcards') || '[]');
-understood = JSON.parse(localStorage.getItem('understoodCards') || '[]');
-mastered = JSON.parse(localStorage.getItem('masteredCards') || '[]');
-} catch (err) {
-  console.warn('localStorage load skipped:', err);
-  cards = [];
-  mastered = [];
-  seen = [];
-}
-
-    /* Ensure all card objects have id, color and topic properties */
-    const ensureIds = (arr) => {
-      arr.forEach(c => {
-        if(!c.id) c.id = crypto.randomUUID ? crypto.randomUUID() : (Date.now()+Math.random()).toString(36);
-        if(!c.color) c.color = localStorage.getItem('preferredCardColor') || '#f7f9ff';
-        if(c.topic === undefined) c.topic = '';
-      });
-    };
-    ensureIds(cards); ensureIds(understood); ensureIds(mastered);
-
-    /* Colour palette for new cards */
-    const COLOURS = ['#FFEBEE','#E8F5E9','#E3F2FD','#FFFDE7','#F3E5F5','#EFEBE9','#E8EAF6','#FBE9E7','#ECEFF1'];
-    let selectedColour = localStorage.getItem('preferredCardColor') || '#f7f9ff';
-    let preferredTopic = localStorage.getItem('preferredTopic') || '';
-
-    /* Filter states */
+    let deckFilter = 'remaining'; // remaining | understood | mastered | all | random
     let topicFilter = null;
     let keywordFilter = '';
     let keywordEnabled = false;
 
-    let current = 0, showingAnswer = false, locked = false;
-let deckFilter = 'remaining'; // 'all' | 'remaining' | 'understood' | 'mastered'
-let lastDeleted = null, editingIndex = null;
+    let current = 0;
+    let showingAnswer = false;
+    let locked = false;
+    let editingId = null;
+    let lastDeleted = null;
+    let randomIds = [];
 
-    // Drawing variables
-    let drawTarget = null, drawCanvas, drawCtx, drawing=false, strokes=[], stroke=null, isErasing=false;
-    let bgImage = null;
-    // Camera variables
-    let camTarget = null, camStream = null, camFacing = 'environment';
+    const COLOURS = [
+      '#FFEBEE','#E8F5E9','#E3F2FD','#FFFDE7','#F3E5F5',
+      '#EFEBE9','#E8EAF6','#FBE9E7','#ECEFF1','#f7f9ff'
+    ];
+
+    let selectedColour = localStorage.getItem('preferredCardColor') || '#f7f9ff';
+    let preferredTopic = localStorage.getItem('preferredTopic') || '';
+
     const fileInput = document.getElementById('fileInput');
-    const syncInput = document.getElementById('syncInput');
 
-    /* Save state to localStorage */
-   function saveState(){
-  try {
-    localStorage.setItem('flashcards', JSON.stringify(cards));
-    localStorage.setItem('understoodCards', JSON.stringify(understood));
-    localStorage.setItem('masteredCards', JSON.stringify(mastered));
-  } catch (err) {
-    console.warn('localStorage save skipped:', err);
-  }
-}
+    /***********************
+     * Utilities
+     ***********************/
+    function uid(){
+      return crypto.randomUUID ? crypto.randomUUID() : String(Date.now()) + Math.random().toString(36).slice(2);
+    }
 
-    /* Shuffle array using Fisher–Yates */
+    function clone(obj){
+      return JSON.parse(JSON.stringify(obj));
+    }
+
+    function ensureCards(arr){
+      arr.forEach(c => {
+        if(!c.id) c.id = uid();
+        if(c.topic === undefined || c.topic === null) c.topic = '';
+        if(!c.color) c.color = selectedColour;
+        if(c.q === undefined) c.q = c.Question || '';
+        if(c.a === undefined) c.a = c.Answer || '';
+        if(c.qImg === undefined) c.qImg = c.QImage || null;
+        if(c.aImg === undefined) c.aImg = c.AImage || null;
+      });
+    }
+
+    function allCards(){
+      return cards.concat(understood, mastered);
+    }
+
+    function cardLocation(id){
+      let i = cards.findIndex(c => c.id === id);
+      if(i >= 0) return {bucket:'cards', arr:cards, index:i};
+      i = understood.findIndex(c => c.id === id);
+      if(i >= 0) return {bucket:'understood', arr:understood, index:i};
+      i = mastered.findIndex(c => c.id === id);
+      if(i >= 0) return {bucket:'mastered', arr:mastered, index:i};
+      return null;
+    }
+
+    function stripHTML(html){
+      const d = document.createElement('div');
+      d.innerHTML = html || '';
+      return (d.textContent || d.innerText || '').trim();
+    }
+
+    function lighten(hex, lum=.08){
+      let c = String(hex || '#f7f9ff').replace('#','');
+      if(c.length === 3) c = c.split('').map(x => x+x).join('');
+      const n = [0,2,4].map(i => parseInt(c.slice(i,i+2),16));
+      return '#' + n.map(v => Math.min(255, Math.round(v + (255-v)*lum)).toString(16).padStart(2,'0')).join('');
+    }
+
+    function safeName(name){
+      return String(name || 'topic').replace(/[^a-z0-9_-]+/gi,'_').replace(/^_+|_+$/g,'') || 'topic';
+    }
+
+    /***********************
+     * Storage
+     ***********************/
+    function openDB(){
+      return new Promise((resolve,reject)=>{
+        const req = indexedDB.open(DB_NAME,1);
+        req.onupgradeneeded = e => {
+          const db = e.target.result;
+          if(!db.objectStoreNames.contains(DB_STORE)) db.createObjectStore(DB_STORE);
+        };
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function saveToIndexedDB(data){
+      const db = await openDB();
+      return new Promise((resolve,reject)=>{
+        const tx = db.transaction(DB_STORE,'readwrite');
+        tx.objectStore(DB_STORE).put(data,DB_KEY);
+        tx.oncomplete = resolve;
+        tx.onerror = () => reject(tx.error);
+      });
+    }
+
+    async function loadFromIndexedDB(){
+      const db = await openDB();
+      return new Promise((resolve,reject)=>{
+        const tx = db.transaction(DB_STORE,'readonly');
+        const req = tx.objectStore(DB_STORE).get(DB_KEY);
+        req.onsuccess = () => resolve(req.result || null);
+        req.onerror = () => reject(req.error);
+      });
+    }
+
+    async function saveState(){
+      const data = {cards, understood, mastered};
+      try{
+        await saveToIndexedDB(data);
+      }catch(err){
+        console.warn('IndexedDB save failed:', err);
+      }
+
+      try{
+        localStorage.setItem('flashcards', JSON.stringify(cards));
+        localStorage.setItem('understoodCards', JSON.stringify(understood));
+        localStorage.setItem('masteredCards', JSON.stringify(mastered));
+      }catch(err){
+        console.warn('localStorage save skipped, probably too large:', err);
+      }
+    }
+
+    async function loadLocalState(){
+      try{
+        const cached = await loadFromIndexedDB();
+        if(cached){
+          cards = Array.isArray(cached.cards) ? cached.cards : [];
+          understood = Array.isArray(cached.understood) ? cached.understood : [];
+          mastered = Array.isArray(cached.mastered) ? cached.mastered : [];
+          ensureCards(cards); ensureCards(understood); ensureCards(mastered);
+          return true;
+        }
+      }catch(err){
+        console.warn('IndexedDB load failed:', err);
+      }
+
+      try{
+        cards = JSON.parse(localStorage.getItem('flashcards') || '[]');
+        understood = JSON.parse(localStorage.getItem('understoodCards') || '[]');
+        mastered = JSON.parse(localStorage.getItem('masteredCards') || '[]');
+        ensureCards(cards); ensureCards(understood); ensureCards(mastered);
+        return cards.length || understood.length || mastered.length;
+      }catch(err){
+        console.warn('localStorage load failed:', err);
+        cards = []; understood = []; mastered = [];
+        return false;
+      }
+    }
+
+    /***********************
+     * Active list
+     ***********************/
+    function baseList(){
+      if(deckFilter === 'remaining') return cards;
+      if(deckFilter === 'understood') return understood;
+      if(deckFilter === 'mastered') return mastered;
+      if(deckFilter === 'all') return allCards();
+      if(deckFilter === 'random'){
+        const base = allCards();
+        if(randomIds.length === 0) randomIds = shuffle(base.map(c => c.id));
+        const map = new Map(base.map(c => [c.id,c]));
+        return randomIds.map(id => map.get(id)).filter(Boolean);
+      }
+      return cards;
+    }
+
+    function activeList(){
+      let list = baseList();
+
+      if(topicFilter){
+        list = list.filter(c => c.topic === topicFilter);
+      }
+
+      if(keywordEnabled && keywordFilter){
+        const kw = keywordFilter.toLowerCase();
+        list = list.filter(c =>
+          stripHTML(c.q).toLowerCase().includes(kw) ||
+          stripHTML(c.a).toLowerCase().includes(kw) ||
+          String(c.topic || '').toLowerCase().includes(kw)
+        );
+      }
+
+      return list;
+    }
+
     function shuffle(arr){
-      for(let i=arr.length-1; i>0; i--){
-        const j = Math.floor(Math.random() * (i+1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
+      for(let i=arr.length-1;i>0;i--){
+        const j = Math.floor(Math.random()*(i+1));
+        [arr[i],arr[j]] = [arr[j],arr[i]];
       }
       return arr;
     }
 
-    /* Compute list for display taking into account view and filters */
-    function activeList(){
-  let base;
-  if(deckFilter === 'all'){
-    base = cards.concat(understood, mastered);
-  } else if(deckFilter === 'understood'){
-    base = understood;
-  } else if(deckFilter === 'mastered'){
-    base = mastered;
-  } else {
-    base = cards; // remaining
-  }
-
-  let list = base;
-
-  if(topicFilter){
-    list = list.filter(c => c.topic === topicFilter);
-  }
-
-  if(keywordEnabled && keywordFilter){
-    const kw = keywordFilter.toLowerCase();
-    list = list.filter(c =>
-      (c.q && c.q.toLowerCase().includes(kw)) ||
-      (c.a && c.a.toLowerCase().includes(kw)) ||
-      (c.topic && c.topic.toLowerCase().includes(kw))
-    );
-  }
-
-  return list;
-}
-
-    /* Update counts displayed in the UI */
-    function updateCounts(){
-  document.getElementById('total').textContent = activeList().length;
-  const jumpInput = document.getElementById('jump');
-  if(jumpInput) jumpInput.value = activeList().length ? current + 1 : 0;
-  updateTopicDrawer();
-}
-
-    /* Toggle overflow menu */
-    function toggleOverflow(forceClose){
-      const menu = document.getElementById('overflowMenu');
-      if(forceClose){ menu.style.display='none'; return; }
-      menu.style.display = menu.style.display==='flex' ? 'none' : 'flex';
-      menu.style.flexDirection = 'column';
-    }
-    document.addEventListener('click', (e)=>{
-      const m=document.getElementById('overflowMenu'); const b=document.getElementById('overflowBtn');
-      if(m.style.display==='flex' && !m.contains(e.target) && e.target!==b){ m.style.display='none'; }
-    });
-
-    /* Lighten a colour by a given fraction (0-1) */
-    function lightenColor(hex, lum=0.1){
-      let c = (hex||'').replace(/#/,'');
-      if(c.length===3) c = c.split('').map(ch => ch+ch).join('');
-      let r = parseInt(c.substring(0,2),16);
-      let g = parseInt(c.substring(2,4),16);
-      let b = parseInt(c.substring(4,6),16);
-      r = Math.round(Math.min(255, r + (255 - r)*lum));
-      g = Math.round(Math.min(255, g + (255 - g)*lum));
-      b = Math.round(Math.min(255, b + (255 - b)*lum));
-      return '#' + [r,g,b].map(x => x.toString(16).padStart(2,'0')).join('');
+    function resetPosition(){
+      current = 0;
+      showingAnswer = false;
+      locked = false;
     }
 
-    /* Render a specific card */
+    function setDeckFilter(filter, topic = null){
+      deckFilter = filter;
+      topicFilter = topic;
+      if(filter === 'random') randomIds = shuffle(allCards().map(c => c.id));
+      resetPosition();
+      render();
+    }
+
+    /***********************
+     * Rendering
+     ***********************/
     function render(){
+      const list = activeList();
       const front = document.getElementById('front');
-      const back  = document.getElementById('back');
+      const back = document.getElementById('back');
       const inner = document.getElementById('cardInner');
-      const show  = document.getElementById('showBtn');
-      const list  = activeList();
-      if(!front||!back||!inner||!show) return;
+      const showBtn = document.getElementById('showBtn');
+      const lockPill = document.getElementById('lockPill');
 
-      if(list.length === 0){
-        const msg = view === 'mastered' ? 'No mastered cards.' : (view === 'seen' ? 'No seen cards.' : (view === 'random' ? 'No cards to randomise.' : 'No cards. Add or import some.'));
-        front.innerHTML = msg; back.innerHTML = msg;
+      if(current >= list.length) current = Math.max(0, list.length - 1);
+
+      if(!list.length){
+        const msg = topicFilter
+          ? 'No cards match this topic/filter.'
+          : 'No cards here. Add or import some.';
+        front.className = 'face front empty';
+        back.className = 'face back empty';
+        front.innerHTML = msg;
+        back.innerHTML = msg;
         front.style.background = '#f7f9ff';
-        back.style.background  = '#eef2ff';
-        show.style.display = 'none';
-        inner.classList.remove('flipped'); updateCounts(); return;
+        back.style.background = '#eef2ff';
+        inner.classList.remove('flipped');
+        showBtn.style.display = 'none';
+        lockPill.style.display = 'none';
+        updateUI();
+        return;
       }
+
       const card = list[current];
-      let prefix = '';
-if(deckFilter === 'understood') prefix = '<em>(Understood)</em><br>';
-if(deckFilter === 'mastered') prefix = '<em>(Mastered)</em><br>';
-      let qHtml = prefix + (card.q || '');
-      const qImage = card.qImg; if(qImage) qHtml += `<br><img src="${qImage}">`;
-      let aHtml = prefix + (card.a || '');
-      const aImage = card.aImg; if(aImage) aHtml += `<br><img src="${aImage}">`;
-      front.innerHTML = qHtml; back.innerHTML = aHtml;
-      // Set colours based on card colour
+      const bucket = cardLocation(card.id)?.bucket || 'cards';
+      const prefix = bucket === 'understood' ? '<em>(Understood)</em><br>' :
+                     bucket === 'mastered' ? '<em>(Mastered)</em><br>' : '';
+
+      const topicChip = card.topic ? `<div class="topic-chip">${escapeHTML(card.topic)}</div>` : '';
+
+      front.className = 'face front';
+      back.className = 'face back';
+
+      front.innerHTML = topicChip + prefix + (card.q || '') + (card.qImg ? `<br><img src="${card.qImg}" alt="">` : '');
+      back.innerHTML = topicChip + prefix + (card.a || '') + (card.aImg ? `<br><img src="${card.aImg}" alt="">` : '');
+
       const clr = card.color || '#f7f9ff';
       front.style.background = clr;
-      back.style.background  = lightenColor(clr, 0.06);
-      show.style.display = 'block';
-      if(showingAnswer) inner.classList.add('flipped'); else inner.classList.remove('flipped');
-      document.getElementById('lockPill').style.display = locked ? 'block' : 'none';
-      updateCounts();
+      back.style.background = lighten(clr,.08);
+
+      showBtn.style.display = 'block';
+      inner.classList.toggle('flipped', showingAnswer);
+      lockPill.style.display = locked ? 'block' : 'none';
+
+      updateUI();
     }
 
-    /* Update topic list drawer */
-    function updateTopicDrawer(){
-  const listEl = document.getElementById('topicList');
-  if(!listEl) return;
+    function escapeHTML(s){
+      return String(s).replace(/[&<>"']/g, ch => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'
+      }[ch]));
+    }
 
-  const allCards = cards.concat(understood, mastered);
+    function updateUI(){
+      const list = activeList();
+      document.getElementById('total').textContent = list.length;
+      document.getElementById('jump').value = list.length ? current + 1 : 0;
 
-  // topic list should usually reflect the current deck filter
-  let topicSource;
-  if(deckFilter === 'all') topicSource = allCards;
-  else if(deckFilter === 'understood') topicSource = understood;
-  else if(deckFilter === 'mastered') topicSource = mastered;
-  else topicSource = cards;
+      document.getElementById('deckSummary').textContent =
+        `${cards.length} remaining · ${understood.length} understood · ${mastered.length} mastered`;
 
-  const topics = Array.from(
-    new Set(topicSource.map(c => c.topic || '').filter(t => t))
-  ).sort();
+      updateDrawer();
+    }
 
-  listEl.innerHTML = '';
+    function updateDrawer(){
+      const viewList = document.getElementById('viewList');
+      const topicList = document.getElementById('topicList');
+      viewList.innerHTML = '';
+      topicList.innerHTML = '';
 
-  function addItem(label, active, onClick, colour = '#888'){
-    const div = document.createElement('div');
-    div.className = 'topic-item' + (active ? ' active' : '');
+      const views = [
+        ['remaining','Remaining',cards.length,'#2dbf6e'],
+        ['understood','Understood',understood.length,'#2196f3'],
+        ['mastered','Mastered',mastered.length,'#9c27b0'],
+        ['all','All',allCards().length,'#888'],
+        ['random','Random',allCards().length,'#f1c40f']
+      ];
 
-    const ribbon = document.createElement('div');
-    ribbon.className = 'ribbon';
-    ribbon.style.background = colour;
-    div.appendChild(ribbon);
+      views.forEach(([key,label,count,colour]) => {
+        viewList.appendChild(drawerItem(label, count, colour, deckFilter === key && !topicFilter, () => {
+          closeDrawer();
+          setDeckFilter(key,null);
+        }));
+      });
 
-    const span = document.createElement('span');
-    span.textContent = label;
-    div.appendChild(span);
+      const source = deckFilter === 'remaining' ? cards :
+                     deckFilter === 'understood' ? understood :
+                     deckFilter === 'mastered' ? mastered :
+                     allCards();
 
-    div.onclick = onClick;
-    listEl.appendChild(div);
-  }
+      const topics = [...new Set(source.map(c => c.topic || '').filter(Boolean))].sort((a,b)=>a.localeCompare(b));
 
-  addItem('All', deckFilter === 'all' && topicFilter === null, () => {
-    deckFilter = 'all';
-    topicFilter = null;
-    current = 0;
-    toggleDrawer(true);
-    hideAnswer();
-  }, '#888');
+      if(!topics.length){
+        const none = document.createElement('small');
+        none.textContent = 'No topics in this view.';
+        topicList.appendChild(none);
+      }
 
-  addItem('Remaining', deckFilter === 'remaining' && topicFilter === null, () => {
-    deckFilter = 'remaining';
-    topicFilter = null;
-    current = 0;
-    toggleDrawer(true);
-    hideAnswer();
-  }, '#4caf50');
+      topics.forEach(topic => {
+        const count = source.filter(c => c.topic === topic).length;
+        const sample = source.find(c => c.topic === topic) || {};
+        topicList.appendChild(drawerItem(topic, count, sample.color || '#888', topicFilter === topic, () => {
+          topicFilter = topic;
+          current = 0;
+          showingAnswer = false;
+          locked = false;
+          closeDrawer();
+          render();
+        }));
+      });
+    }
 
-  addItem('Understood', deckFilter === 'understood' && topicFilter === null, () => {
-    deckFilter = 'understood';
-    topicFilter = null;
-    current = 0;
-    toggleDrawer(true);
-    hideAnswer();
-  }, '#2196f3');
+    function drawerItem(label,count,colour,active,onClick){
+      const div = document.createElement('div');
+      div.className = 'topic-item' + (active ? ' active' : '');
+      div.innerHTML = `
+        <span class="ribbon" style="background:${colour}"></span>
+        <span class="topic-name">${escapeHTML(label)}</span>
+        <span class="badge">${count}</span>
+      `;
+      div.onclick = onClick;
+      return div;
+    }
 
-  addItem('Mastered', deckFilter === 'mastered' && topicFilter === null, () => {
-    deckFilter = 'mastered';
-    topicFilter = null;
-    current = 0;
-    toggleDrawer(true);
-    hideAnswer();
-  }, '#9c27b0');
-
-  topics.forEach(t => {
-    const sample = topicSource.find(c => c.topic === t) || allCards.find(c => c.topic === t);
-    const colour = sample?.color || '#f7f9ff';
-
-    addItem(t, topicFilter === t, () => {
-      topicFilter = t;
-      current = 0;
-      toggleDrawer(true);
+    /***********************
+     * Navigation / answer reveal
+     ***********************/
+    function nextCard(){
+      const list = activeList();
+      if(!list.length) return;
+      current = (current + 1) % list.length;
       hideAnswer();
-    }, colour);
-  });
-}
+    }
 
-    /* Show next/previous card */
-    function nextCard(){ const list = activeList(); if(!list.length) return; current = (current + 1) % list.length; hideAnswer(); }
-    function prevCard(){ const list = activeList(); if(!list.length) return; current = (current - 1 + list.length) % list.length; hideAnswer(); }
+    function prevCard(){
+      const list = activeList();
+      if(!list.length) return;
+      current = (current - 1 + list.length) % list.length;
+      hideAnswer();
+    }
+
+    function showAnswer(){
+      showingAnswer = true;
+      render();
+    }
+
+    function hideAnswer(){
+      showingAnswer = false;
+      locked = false;
+      render();
+    }
+
+    function unlockAnswer(){
+      locked = false;
+      hideAnswer();
+    }
 
     let startX = null;
-    function showAnswer(){ showingAnswer = true; render(); }
-    function hideAnswer(){ showingAnswer = false; locked = false; render(); }
-    function unlockAnswer(){ locked = false; hideAnswer(); }
-    function onDown(e){ startX = (e.touches? e.touches[0].clientX : e.clientX); showAnswer(); }
-    function onMove(e){ if(startX==null) return; const x = (e.touches? e.touches[0].clientX : e.clientX); if(x - startX > 70){ locked = true; document.getElementById('lockPill').style.display = 'block'; } }
-    function onUp(){ if(!locked) hideAnswer(); startX = null; }
 
-    /* Mark card as understood when answer shown */
-    function markUnderstood(){
-  const list = activeList();
-  if(!list.length) return;
+    function onRevealDown(e){
+      startX = e.touches ? e.touches[0].clientX : e.clientX;
+      showAnswer();
+    }
 
-  const card = list[current];
+    function onRevealMove(e){
+      if(startX === null) return;
+      const x = e.touches ? e.touches[0].clientX : e.clientX;
+      if(x - startX > 70){
+        locked = true;
+        document.getElementById('lockPill').style.display = 'block';
+      }
+    }
 
-  // only move from Remaining to Understood
-  if(cards.some(c => c.id === card.id)){
-    cards = cards.filter(c => c.id !== card.id);
-    if(!understood.some(c => c.id === card.id)) understood.push(card);
-  }
+    function onRevealUp(){
+      if(!locked) hideAnswer();
+      startX = null;
+    }
 
-  if(current >= activeList().length) current = 0;
-  hideAnswer();
-  saveState();
-}
+    /***********************
+     * Card actions
+     ***********************/
+    async function markUnderstood(){
+      const card = activeList()[current];
+      if(!card) return;
 
-    /* Mark card as mastered */
-    function markMastered(){
-  const list = activeList();
-  if(!list.length) return;
+      const loc = cardLocation(card.id);
+      if(!loc) return;
 
-  const card = list[current];
+      if(loc.bucket === 'mastered') return;
 
-  if(!mastered.some(c => c.id === card.id)) mastered.push(card);
+      if(loc.bucket === 'cards'){
+        cards.splice(loc.index,1);
+        understood.push(card);
+      }
 
-  cards = cards.filter(c => c.id !== card.id);
-  understood = understood.filter(c => c.id !== card.id);
+      afterMutation();
+    }
 
-  if(current >= activeList().length) current = 0;
-  hideAnswer();
-  saveState();
-}
+    async function markMastered(){
+      const card = activeList()[current];
+      if(!card) return;
 
-    /* Delete card */
-    function deleteCard(){
-  const list = activeList();
-  if(!list.length) return;
+      cards = cards.filter(c => c.id !== card.id);
+      understood = understood.filter(c => c.id !== card.id);
+      if(!mastered.some(c => c.id === card.id)) mastered.push(card);
 
-  const card = list[current];
-  let from = 'remaining';
+      afterMutation();
+    }
 
-  if(understood.some(c => c.id === card.id)) from = 'understood';
-  else if(mastered.some(c => c.id === card.id)) from = 'mastered';
+    async function deleteCurrent(){
+      const card = activeList()[current];
+      if(!card) return;
 
-  lastDeleted = { card: structuredClone(card), from, index: current };
+      const loc = cardLocation(card.id);
+      if(!loc) return;
 
-  cards = cards.filter(c => c.id !== card.id);
-  understood = understood.filter(c => c.id !== card.id);
-  mastered = mastered.filter(c => c.id !== card.id);
+      lastDeleted = {
+        card: clone(card),
+        bucket: loc.bucket,
+        index: loc.index
+      };
 
-  if(current >= activeList().length) current = 0;
-  hideAnswer();
-  saveState();
-}
+      loc.arr.splice(loc.index,1);
+      afterMutation();
+    }
 
-    /* Modal open/close for adding/editing */
+    async function undoDelete(){
+      if(!lastDeleted) return;
+
+      const target = lastDeleted.bucket === 'understood' ? understood :
+                     lastDeleted.bucket === 'mastered' ? mastered : cards;
+
+      if(!target.some(c => c.id === lastDeleted.card.id)){
+        target.splice(Math.min(lastDeleted.index,target.length),0,lastDeleted.card);
+      }
+
+      lastDeleted = null;
+      afterMutation();
+    }
+
+    async function afterMutation(){
+      if(deckFilter === 'random') randomIds = randomIds.filter(id => allCards().some(c => c.id === id));
+      const list = activeList();
+      if(current >= list.length) current = Math.max(0, list.length - 1);
+      hideAnswer();
+      await saveState();
+    }
+
+    /***********************
+     * Modal / editing
+     ***********************/
     function openModal(){
-      editingIndex = null;
+      editingId = null;
       document.getElementById('modalTitle').textContent = 'Add Flashcard';
       document.getElementById('qEd').innerHTML = '';
       document.getElementById('aEd').innerHTML = '';
-      setThumb('q', null); setThumb('a', null);
-      document.getElementById('qImg').value = ''; document.getElementById('aImg').value = '';
-      document.getElementById('topicInput').value = preferredTopic;
-      chooseColour(selectedColour, false); // highlight previously selected colour but don't update global
-      document.getElementById('modal').style.display = 'flex';
+      setThumb('q',null);
+      setThumb('a',null);
+      document.getElementById('qImg').value = '';
+      document.getElementById('aImg').value = '';
+      document.getElementById('topicInput').value = topicFilter || preferredTopic || '';
+      chooseColour(selectedColour,false);
+      document.getElementById('modal').classList.add('open');
     }
-    function closeModal(){ document.getElementById('modal').style.display = 'none'; }
 
-    /* Edit current card */
-    function editCard(){
-      const list = activeList(); if(!list.length) return; const card = list[current]; editingIndex = current;
+    function closeModal(){
+      document.getElementById('modal').classList.remove('open');
+    }
+
+    function editCurrent(){
+      const card = activeList()[current];
+      if(!card) return;
+
+      editingId = card.id;
       document.getElementById('modalTitle').textContent = 'Edit Flashcard';
       document.getElementById('qEd').innerHTML = card.q || '';
       document.getElementById('aEd').innerHTML = card.a || '';
-      setThumb('q', card.qImg || null); setThumb('a', card.aImg || null);
-      document.getElementById('qImg').value = ''; document.getElementById('aImg').value = '';
+      setThumb('q',card.qImg || null);
+      setThumb('a',card.aImg || null);
+      document.getElementById('qImg').value = '';
+      document.getElementById('aImg').value = '';
       document.getElementById('topicInput').value = card.topic || '';
-      chooseColour(card.color || selectedColour, false);
-      document.getElementById('modal').style.display = 'flex';
+      chooseColour(card.color || selectedColour,false);
+      document.getElementById('modal').classList.add('open');
     }
 
-    /* Read image as data URL */
-    function readAsDataURL(file){ return new Promise((res, rej)=>{ const r=new FileReader(); r.onload=e=>res(e.target.result); r.onerror=rej; r.readAsDataURL(file); }); }
+    function readAsDataURL(file){
+      return new Promise((resolve,reject)=>{
+        const r = new FileReader();
+        r.onload = e => resolve(e.target.result);
+        r.onerror = reject;
+        r.readAsDataURL(file);
+      });
+    }
 
-    /* Save card (new or edited) */
     async function saveCard(){
-      // Save card triggered
       const q = document.getElementById('qEd').innerHTML.trim();
       const a = document.getElementById('aEd').innerHTML.trim();
-      let qImg = getThumb('q'); let aImg = getThumb('a');
-      const qF = document.getElementById('qImg').files[0]; const aF = document.getElementById('aImg').files[0];
-      if(qF) qImg = await readAsDataURL(qF); if(aF) aImg = await readAsDataURL(aF);
       const topic = document.getElementById('topicInput').value.trim();
 
-      // update preferred topic
+      let qImg = getThumb('q');
+      let aImg = getThumb('a');
+
+      const qFile = document.getElementById('qImg').files[0];
+      const aFile = document.getElementById('aImg').files[0];
+
+      if(qFile) qImg = await readAsDataURL(qFile);
+      if(aFile) aImg = await readAsDataURL(aFile);
+
       preferredTopic = topic;
-      localStorage.setItem('preferredTopic', preferredTopic);
+      localStorage.setItem('preferredTopic',preferredTopic);
+      localStorage.setItem('preferredCardColor',selectedColour);
 
-      if(editingIndex !== null){
-        const card = activeList()[editingIndex];
-        card.q = q; card.a = a; card.qImg = qImg || null; card.aImg = aImg || null;
-        card.topic = topic;
-        card.color = selectedColour;
-      } else {
-        const card = { id: crypto.randomUUID ? crypto.randomUUID() : (Date.now()+Math.random()).toString(36), q, a, qImg, aImg, topic, color: selectedColour };
-        cards.push(card);
-        setView('remaining'); current = cards.length - 1;
-      }
-      closeModal(); hideAnswer(); saveState(); updateTopicDrawer();
-    }
-
-    /* Thumbnail helpers */
-    function setThumb(which, dataUrl){ const box = document.getElementById(which+'Thumb'); const img = document.getElementById(which+'ThumbImg'); if(dataUrl){ box.style.display='flex'; img.src=dataUrl; box.dataset.value=dataUrl; } else { box.style.display='none'; img.removeAttribute('src'); box.dataset.value=''; } }
-    function getThumb(which){ const box = document.getElementById(which+'Thumb'); return box.dataset.value || null; }
-    function removeQImg(){ setThumb('q', null); }
-    function removeAImg(){ setThumb('a', null); }
-
-    /* Colour selection logic */
-    function chooseColour(colour, updateGlobal=true){ selectedColour = colour; const opts = document.querySelectorAll('.colour-opt'); opts.forEach(opt => { opt.classList.toggle('selected', opt.dataset.colour === colour); }); if(updateGlobal){ localStorage.setItem('preferredCardColor', selectedColour); } }
-    function initColourOptions(){ const container = document.getElementById('colourOptions'); if(!container) return; container.innerHTML = '';
-      COLOURS.forEach(col => { const div = document.createElement('div'); div.className = 'colour-opt'; div.style.background = col; div.dataset.colour = col; div.onclick = () => chooseColour(col, true); container.appendChild(div); }); chooseColour(selectedColour, false);
-    }
-
-    /* Drawing helpers (unchanged except for context) */
-    function openDrawing(target){
-      drawTarget = target; const modal = document.getElementById('drawModal'); drawCanvas = document.getElementById('drawCanvas'); modal.style.display='flex';
-      const rect = drawCanvas.getBoundingClientRect(); const dpr = window.devicePixelRatio || 1; drawCanvas.style.width = rect.width+'px'; drawCanvas.style.height = rect.height+'px'; drawCanvas.width = rect.width * dpr; drawCanvas.height = rect.height * dpr; drawCtx = drawCanvas.getContext('2d'); drawCtx.scale(dpr,dpr);
-      strokes=[]; stroke=null; drawing=false; isErasing=false; document.getElementById('eraserBtn').classList.remove('active');
-      bgImage = null;
-      const bgToggle = document.getElementById('bgToggle');
-      const src = target==='q' ? (getThumb('q')) : (getThumb('a'));
-      if(bgToggle.checked && src){ bgImage = new Image(); bgImage.onload = renderStrokes; bgImage.src = src; } else { renderStrokes(); }
-      drawCanvas.onpointerdown = startDraw; drawCanvas.onpointermove = drawMove; drawCanvas.onpointerup = endDraw; drawCanvas.onpointerleave = endDraw;
-    }
-    function closeDrawing(){ document.getElementById('drawModal').style.display='none'; drawCanvas.onpointerdown = drawCanvas.onpointermove = drawCanvas.onpointerup = drawCanvas.onpointerleave = null; }
-    function syncDrawSettings(){ /* no-op for dynamic updates */ }
-    function toggleEraser(){ isErasing = !isErasing; document.getElementById('eraserBtn').classList.toggle('active', isErasing); }
-    function startDraw(e){ drawing=true; const {x,y}=coords(e); const color = isErasing ? '#ffffff' : document.getElementById('drawColor').value; const thick = isErasing ? 18 : parseInt(document.getElementById('drawThick').value,10)||2; stroke={ points:[{x,y}], color, thickness: thick }; strokes.push(stroke); renderStrokes(); }
-    function drawMove(e){ if(!drawing) return; const {x,y}=coords(e); stroke.points.push({x,y}); renderStrokes(); }
-    function endDraw(){ drawing=false; stroke=null; }
-    function coords(e){ const r = drawCanvas.getBoundingClientRect(); return { x: e.clientX - r.left, y: e.clientY - r.top }; }
-    function drawBg(){ if(!bgImage) return; const ctx = drawCtx; const c = drawCanvas; const dpr = window.devicePixelRatio||1; const w=c.width/dpr, h=c.height/dpr; const iw=bgImage.width, ih=bgImage.height; const scale=Math.min(w/iw, h/ih); const dx=(w-iw*scale)/2, dy=(h-ih*scale)/2; ctx.drawImage(bgImage, dx, dy, iw*scale, ih*scale); }
-    function renderStrokes(){ const dpr = window.devicePixelRatio||1; const w=drawCanvas.width/dpr, h=drawCanvas.height/dpr; drawCtx.save(); drawCtx.setTransform(1,0,0,1,0,0); drawCtx.clearRect(0,0,drawCanvas.width,drawCanvas.height); drawCtx.restore(); drawCtx.fillStyle='#ffffff'; drawCtx.fillRect(0,0,w,h); drawBg(); for(const s of strokes){ if(!s.points.length) continue; drawCtx.strokeStyle = s.color; drawCtx.lineWidth = s.thickness; drawCtx.lineCap='round'; drawCtx.beginPath(); drawCtx.moveTo(s.points[0].x,s.points[0].y); for(let i=1;i<s.points.length;i++){ const p=s.points[i]; drawCtx.lineTo(p.x,p.y); } drawCtx.stroke(); drawCtx.closePath(); } }
-    function undoStroke(){ if(strokes.length){ strokes.pop(); renderStrokes(); } }
-    function saveDrawing(){ renderStrokes(); const data = drawCanvas.toDataURL('image/png'); if(drawTarget==='q'){ setThumb('q', data); } else { setThumb('a', data); } closeDrawing(); }
-
-    /* Camera helpers (unchanged) */
-    function cameraEntry(target){
-      if(window.isSecureContext && navigator.mediaDevices && navigator.mediaDevices.getUserMedia){
-        openCamera(target);
-      } else {
-        const picker = document.getElementById(target === 'q' ? 'qCam' : 'aCam');
-        picker.onchange = async (e)=>{
-          const f = e.target.files[0]; if(!f) return;
-          const data = await readAsDataURL(f);
-          if(target==='q') setThumb('q', data); else setThumb('a', data);
-          e.target.value = '';
-        };
-        picker.click();
-      }
-    }
-    function openCamHelp(message){
-      const help = document.getElementById('camHelpBody');
-      const origin = location.origin;
-      const isSecure = window.isSecureContext;
-      const proto = location.protocol;
-      const insecureNote = isSecure ? '' : `<li>This page is not in a secure context (<code>${proto}</code>). Camera requires <b>https:</b> or <b>http://localhost</b>. If you opened this from a file or chat app (e.g. <code>content://</code>), use the Camera button (fallback) or host it over https.</li>`;
-      help.innerHTML = `\n        <p>${message || 'We could not access the camera.'}</p>\n        <ul>\n          ${insecureNote}\n          <li>Android Chrome: Menu → Settings → Site settings → Camera → Allow for this site, then reload.</li>\n          <li>You can always use the “Question Image / Answer Image” pickers to choose from Files/Photos.</li>\n        </ul>`;
-      document.getElementById('camHelpModal').style.display = 'flex';
-    }
-    function closeCamHelp(){ document.getElementById('camHelpModal').style.display='none'; }
-    async function openCamera(target){
-      camTarget = target;
-      const modal = document.getElementById('cameraModal');
-      const video = document.getElementById('cameraVideo');
-      const status = document.getElementById('camStatus');
-      status.textContent = 'Starting camera…';
-      modal.style.display = 'flex';
-      try {
-        if(navigator.permissions && navigator.permissions.query){
-          try{
-            const p = await navigator.permissions.query({ name: 'camera' });
-            if(p.state === 'denied'){
-              throw new Error('Permission denied. Enable in site settings.');
-            }
-          }catch(_){ }
+      if(editingId){
+        const loc = cardLocation(editingId);
+        if(loc){
+          Object.assign(loc.arr[loc.index], {
+            q,a,topic,
+            qImg:qImg || null,
+            aImg:aImg || null,
+            color:selectedColour
+          });
         }
-        await stopCam();
-        camStream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: camFacing } }, audio: false });
-        video.srcObject = camStream;
-        status.textContent = camFacing === 'user' ? 'Front camera' : 'Back camera';
-      } catch (err) {
-        console.error(err);
-        document.getElementById('cameraModal').style.display = 'none';
-        openCamHelp(err && err.message ? err.message : 'Camera not available or permission denied.');
+      }else{
+        const card = {
+          id:uid(),
+          q,a,
+          topic,
+          qImg:qImg || null,
+          aImg:aImg || null,
+          color:selectedColour
+        };
+        cards.push(card);
+        deckFilter = 'remaining';
+        topicFilter = topic || null;
+        current = activeList().findIndex(c => c.id === card.id);
+        if(current < 0) current = 0;
+      }
+
+      closeModal();
+      showingAnswer = false;
+      locked = false;
+      await saveState();
+      render();
+    }
+
+    function setThumb(which,data){
+      const box = document.getElementById(which + 'Thumb');
+      const img = document.getElementById(which + 'ThumbImg');
+      if(data){
+        box.style.display = 'flex';
+        img.src = data;
+        box.dataset.value = data;
+      }else{
+        box.style.display = 'none';
+        img.removeAttribute('src');
+        box.dataset.value = '';
       }
     }
-    async function switchCamera(){ camFacing = camFacing === 'user' ? 'environment' : 'user'; if(document.getElementById('cameraModal').style.display !== 'flex') return; await openCamera(camTarget); }
-    function takePhoto(){
-      const video = document.getElementById('cameraVideo');
-      const canvas = document.getElementById('cameraCanvas');
-      if(!video.videoWidth){ alert('Camera not ready yet.'); return; }
-      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const data = canvas.toDataURL('image/jpeg', 0.92);
-      if(camTarget === 'q') setThumb('q', data); else setThumb('a', data);
-      closeCamera();
+
+    function getThumb(which){
+      return document.getElementById(which + 'Thumb').dataset.value || null;
     }
-    async function stopCam(){ if(camStream){ camStream.getTracks().forEach(t => t.stop()); camStream = null; } }
-    async function closeCamera(){ await stopCam(); document.getElementById('cameraModal').style.display = 'none'; }
 
-    /* Export JSON with progress saved */
-    const EXPORT_EXT = '.json';
-    function exportJSON(){ const data = { cards, understood, mastered }; const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }); const url = URL.createObjectURL(blob); const a = document.createElement('a'); a.href = url; a.download = 'flashcards' + EXPORT_EXT; a.click(); URL.revokeObjectURL(url); }
-
-    /* Export Topic as plain text */
-    function exportTopic(){
-      const topic = topicFilter;
-      if(!topic){
-        alert('Please select a topic to export.');
-        return;
-      }
-      // gather all cards across unmastered and mastered
-      const allCards = cards.concat(mastered);
-      const filteredCards = allCards.filter(c => c.topic === topic);
-      if(filteredCards.length === 0){
-        alert('No cards found for selected topic');
-        return;
-      }
-      const lines = [];
-      filteredCards.forEach((card, idx) => {
-        // convert rich HTML to plain text
-        const tmp = document.createElement('div');
-        tmp.innerHTML = card.q || '';
-        const qText = (tmp.textContent || tmp.innerText || '').trim();
-        tmp.innerHTML = card.a || '';
-        const aText = (tmp.textContent || tmp.innerText || '').trim();
-        lines.push((idx + 1) + '. ' + qText + '\n' + aText);
+    function initColourOptions(){
+      const box = document.getElementById('colourOptions');
+      box.innerHTML = '';
+      COLOURS.forEach(col => {
+        const d = document.createElement('div');
+        d.className = 'colour-opt';
+        d.style.background = col;
+        d.dataset.colour = col;
+        d.onclick = () => chooseColour(col,true);
+        box.appendChild(d);
       });
-      const content = lines.join('\n\n');
-      const blob = new Blob([content], { type: 'text/plain' });
-      // sanitise file name
-      const safe = topic.replace(/[^a-zA-Z0-9_-]/g, '_') || 'topic';
-      const filename = safe + '.txt';
+      chooseColour(selectedColour,false);
+    }
+
+    function chooseColour(colour,save=true){
+      selectedColour = colour;
+      document.querySelectorAll('.colour-opt').forEach(o => {
+        o.classList.toggle('selected', o.dataset.colour === colour);
+      });
+      if(save) localStorage.setItem('preferredCardColor',selectedColour);
+    }
+
+    function fmt(cmd){ document.execCommand(cmd,false,null); }
+    function setTextColour(c){ document.execCommand('foreColor',false,c); }
+    function setTextSize(s){ if(s) document.execCommand('fontSize',false,s); }
+
+    /***********************
+     * Import / export
+     ***********************/
+    function exportJSON(){
+      const blob = new Blob([JSON.stringify({cards,understood,mastered},null,2)], {type:'application/json'});
+      downloadBlob(blob,'flashcards.json');
+    }
+
+    function exportTopic(){
+      if(!topicFilter){
+        alert('Please select a topic first.');
+        return;
+      }
+
+      const list = allCards().filter(c => c.topic === topicFilter);
+      if(!list.length){
+        alert('No cards found for selected topic.');
+        return;
+      }
+
+      const text = list.map((c,i) =>
+        `${i+1}. ${stripHTML(c.q)}\n${stripHTML(c.a)}`
+      ).join('\n\n');
+
+      downloadBlob(new Blob([text],{type:'text/plain'}), safeName(topicFilter) + '.txt');
+    }
+
+    function downloadBlob(blob,name){
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = filename;
+      a.download = name;
       a.click();
       URL.revokeObjectURL(url);
     }
 
-/* Import cards file */
-fileInput.addEventListener('change', async (e)=>{ 
-  const file = e.target.files[0]; 
-  if(!file) return; 
-
-  const r = new FileReader(); 
-  r.onload = async (ev)=>{ 
-    try{ 
-      const data = JSON.parse(ev.target.result); 
-      cards = Array.isArray(data.cards)?data.cards:[]; 
-      seen = Array.isArray(data.seen)?data.seen:[]; 
-      mastered = Array.isArray(data.mastered)?data.mastered:[]; 
-
-      ensureIds(cards); 
-      ensureIds(seen); 
-      ensureIds(mastered);
-
-      const bySig = c=>`${c.q||''}\u0001${c.a||''}\u0001${c.qImg||''}\u0001${c.aImg||''}`; 
-      const map = new Map(cards.map(c=>[bySig(c), c])); 
-      seen = seen.map(s=>map.get(bySig(s))||s); 
-      mastered = mastered.map(m=>map.get(bySig(m))||m);
-
-      deckFilter = 'remaining';
-topicFilter = null;
-current = 0;
-hideAnswer(); 
-      saveState(); 
-      await saveDeckToIndexedDB({ cards, seen, mastered }); 
-      alert('Deck saved to browser storage');
-      updateTopicDrawer(); 
-    }catch(err){ 
-alert('Import failed: ' + (err && err.message ? err.message : err));    } 
-  }; 
-
-  r.readAsText(file); 
-  e.target.value=''; 
-});
-
-    /* Rich text formatting commands */
-    function fmt(cmd){ document.execCommand(cmd, false, null); }
-    function setColor(c){ document.execCommand('foreColor', false, c); }
-    function setSize(s){ if(s) document.execCommand('fontSize', false, s); }
-
-    /* Handle jump input on Enter key (legacy) */
-    function handleJump(e){ if(e.key !== 'Enter') return; const list = activeList(); const n = parseInt(e.target.value,10); if(!isNaN(n) && n>=1 && n<=list.length){ current=n-1; hideAnswer(); } else { e.target.select(); } }
-
-
-    /* Shuffle deck temporarily */
-    // The shuffle functionality is no longer exposed via the UI because random order can still be achieved via the 'Random' view.
-    
-
-    /* Drawer toggle */
-    function toggleDrawer(forceClose){ const drawer = document.getElementById('topicDrawer'); if(!drawer) return; if(forceClose){ drawer.classList.remove('open'); return; } drawer.classList.toggle('open'); }
-    document.getElementById('drawerToggle').addEventListener('click', () => { toggleDrawer(); });
-    document.addEventListener('click', (e) => {
-      const drawer = document.getElementById('topicDrawer'); const toggleBtn = document.getElementById('drawerToggle');
-      if(!drawer) return; if(drawer.classList.contains('open')){
-        if(!drawer.contains(e.target) && e.target !== toggleBtn) drawer.classList.remove('open');
-      }
-    });
-
-    /* Keyword filter listeners */
-    document.getElementById('keywordInput').addEventListener('input', (e) => { keywordFilter = e.target.value.trim(); if(keywordEnabled) { current = 0; hideAnswer(); if(view === 'random'){ setView('random'); } else { render(); } } });
-    document.getElementById('keywordToggle').addEventListener('change', (e) => { keywordEnabled = e.target.checked; current = 0; hideAnswer(); if(view === 'random'){ setView('random'); } else { render(); } });
-
-    /* Helper to add accelerated scrolling on arrow buttons */
-    function addRepeatScroll(btn, action){
-      let timerId;
-      let delay;
-      const initialDelay = 500; // milliseconds before repeat starts
-      const speedupFactor = 0.85; // factor to accelerate scrolling (smaller is faster)
-      const minDelay = 80; // minimum delay between scrolls
-      function stop(){
-        if(timerId) clearTimeout(timerId);
-        timerId = null;
-      }
-      btn.addEventListener('pointerdown', (ev) => {
-        ev.preventDefault();
-        // perform one immediate action
-        action();
-        delay = initialDelay;
-        function step(){
-          timerId = setTimeout(() => {
-            action();
-            delay = Math.max(minDelay, delay * speedupFactor);
-            step();
-          }, delay);
-        }
-        step();
-      });
-      ['pointerup','pointerleave','pointercancel'].forEach(event => {
-        btn.addEventListener(event, () => {
-          stop();
-        });
-      });
-    }
-
-    /* Keyboard shortcuts */
-    document.addEventListener('keydown', (e) => {
-      // ignore if typing in input, textarea or contenteditable
-      const tgt = e.target;
-      if(tgt && (tgt.tagName === 'INPUT' || tgt.tagName === 'TEXTAREA' || tgt.isContentEditable)) return;
-      if(e.code === 'Space'){ e.preventDefault(); if(showingAnswer) hideAnswer(); else showAnswer(); }
-      else if(e.code === 'ArrowRight'){ e.preventDefault(); nextCard(); }
-      else if(e.code === 'ArrowLeft'){ e.preventDefault(); prevCard(); }
-      else if(e.key && e.key.toLowerCase() === 'm'){ e.preventDefault(); markMastered(); }
-      else if(e.key && e.key.toLowerCase() === 'd'){ e.preventDefault(); deleteCard(); }
-    });
-
-    /* Load deck from config.json, Google Sheets or local file */
-    async function loadDeck(){
-            // Try loading cached deck first
-      const cachedDeck = await loadDeckFromIndexedDB();
-      if (cachedDeck) {
-        cards = Array.isArray(cachedDeck.cards) ? cachedDeck.cards : [];
-        seen = Array.isArray(cachedDeck.seen) ? cachedDeck.seen : [];
-        mastered = Array.isArray(cachedDeck.mastered) ? cachedDeck.mastered : [];
-
-        ensureIds(cards);
-        ensureIds(seen);
-        ensureIds(mastered);
-
-        return;
-      }
-      let loadedFromRemote = false;
-      try {
-        const resCfg = await fetch('config.json');
-        if(resCfg.ok){
-          const cfg = await resCfg.json();
-          if(cfg && cfg.googleSheetID){
-            const sheetName = cfg.sheetName || 'Sheet1';
-            const url = `https://opensheet.elk.sh/${cfg.googleSheetID}/${sheetName}`;
-            try {
-              const resp = await fetch(url);
-              if(resp.ok){
-                const rows = await resp.json();
-                const defaultColor = localStorage.getItem('preferredCardColor') || '#f7f9ff';
-                cards = rows.map(row => ({
-                  id: crypto.randomUUID ? crypto.randomUUID() : (Date.now()+Math.random()).toString(36),
-                  topic: row.Topic || row.topic || '',
-                  q: row.Question || row.question || '',
-                  a: row.Answer || row.answer || '',
-                  color: row.Colour || row.Color || row.colour || row.color || defaultColor,
-                  qImg: row.QImage || row.qimage || row.qImg || null,
-                  aImg: row.AImage || row.aimage || row.aImg || null
-                }));
-                ensureIds(cards);
-                // reset progress when using remote deck
-                seen = [];
-                mastered = [];
-                saveState();
-                loadedFromRemote = true;
-              }
-            } catch(err) {
-              console.warn('Failed to load from Google Sheets', err);
-            }
-          }
-          // capture scriptUrl from config if provided
-          if(cfg && cfg.scriptUrl){
-            window.scriptUrl = cfg.scriptUrl;
-          }
-        }
-      } catch(err) {
-        // ignore
-      }
-      if(!loadedFromRemote){
-        // attempt to load cards.json
-        try {
-const res = await fetch('https://drive.google.com/uc?export=download&id=1Z6_69h9QqRk85C0i5oZEirNjAd0KQ2c_&confirm=t');          if(res.ok){
-            const data = await res.json();
-cards = Array.isArray(data.cards) ? data.cards : data;            seen = Array.isArray(data.seen) ? data.seen : [];
-            mastered = Array.isArray(data.mastered) ? data.mastered : [];
-            ensureIds(cards); ensureIds(seen); ensureIds(mastered);
-            saveState();
-            return;
-          }
-        } catch(err) {
-          // ignore
-        }
-        // fallback to localStorage deck already loaded at script start
-      }
-    }
-
-    /* Sync Topic feature */
-    // The legacy sync (file-based) remains available via the hidden syncInput's change handler,
-    // but the Sync Topic button now uses in-memory filtering. This function retrieves
-    // the currently selected topic from the sidebar (topicFilter), gathers all cards
-    // across both the "cards" and "mastered" arrays (to include mastered cards as
-    // well as unmastered ones), filters them by the selected topic, and posts
-    // them to the Apps Script endpoint. It guards against sending an empty
-    // payload by alerting the user if no cards exist for the chosen topic.
-    function syncTopicPrompt(){
-      // Determine the currently selected topic
-      const topic = topicFilter;
-      if(!topic){
-        alert('Please select a topic to sync.');
-        return;
-      }
-      // Gather all cards across unmastered and mastered arrays.
-      // (seen is not necessary because it duplicates cards from "cards".)
-      const allCards = cards.concat(mastered);
-      // Filter cards where card.topic equals selected topic
-      const filteredCards = allCards.filter(c => c.topic === topic);
-      // If there are no cards for this topic, inform the user and abort
-      if(filteredCards.length === 0){
-        alert('No cards found for selected topic');
-        return;
-      }
-      // Send the filtered cards to the Apps Script endpoint
-      syncTopicWithServer(topic, filteredCards).then(() => {
-        // After syncing, reload the deck from remote or local to reflect any changes
-        loadDeck().then(() => {
-          deckFilter = 'remaining';
-topicFilter = null;
-current = 0;
-hideAnswer();
-          alert('Topic synced successfully.');
-        });
-      }).catch(err => {
-        console.error(err);
-        alert('Error syncing topic: ' + (err && err.message ? err.message : err));
-      });
-    }
-    // Legacy file-based sync handler remains: it triggers when a user selects a file manually in syncInput.
-    syncInput.addEventListener('change', async (e) => {
+    fileInput.addEventListener('change', async e => {
       const file = e.target.files[0];
       if(!file) return;
-      try {
-        const content = await file.text();
-        let topic;
-        let cardsToSync;
-        if(file.name.toLowerCase().endsWith('.json')){
-          const obj = JSON.parse(content);
-          // Determine topic and cards from JSON
-          if(Array.isArray(obj.cards)){
-            cardsToSync = obj.cards;
-          } else if(Array.isArray(obj)){
-            cardsToSync = obj;
-          } else {
-            throw new Error('Invalid JSON format');
-          }
-          // If a top-level topic property exists, use it; otherwise infer from first card
-          topic = obj.topic || (cardsToSync[0] && (cardsToSync[0].topic || cardsToSync[0].Topic || ''));
-        } else if(file.name.toLowerCase().endsWith('.csv')){
-          // Parse CSV: assume first row header, fields separated by comma with optional quotes
-          const lines = content.trim().split(/\r?\n/);
-          if(lines.length < 2){ throw new Error('CSV does not contain any data'); }
-          const header = lines.shift().split(/,(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)/).map(h => h.replace(/"/g,'').trim());
-          cardsToSync = [];
-          lines.forEach(row => {
-            // split by comma not inside quotes
-            const values = row.split(/,(?=(?:[^\"]*\"[^\"]*\")*[^\"]*$)/).map(val => val.replace(/^\"|\"$/g,'').replace(/\"\"/g,'\"'));
-            const obj = {};
-            header.forEach((h, i) => {
-              obj[h] = values[i] || '';
-            });
-            // convert to expected fields
-            cardsToSync.push({
-              topic: obj.Topic || obj.topic || '',
-              q: obj.Question || obj.question || '',
-              a: obj.Answer || obj.answer || '',
-              color: obj.Colour || obj.Color || obj.colour || obj.color || '',
-              qImg: obj.QImage || obj.qImg || obj.qimage || '',
-              aImg: obj.AImage || obj.aImg || obj.aimage || ''
-            });
-          });
-          topic = cardsToSync[0] && cardsToSync[0].topic;
-        } else {
-          throw new Error('Unsupported file type');
-        }
-        if(!topic){ throw new Error('Could not determine topic from file'); }
-        // ensure each card has expected fields and assign topic if missing
-        cardsToSync = cardsToSync.map(card => ({
-          topic: card.topic || card.Topic || topic || '',
-          q: card.q || card.Question || '',
-          a: card.a || card.Answer || '',
-          color: card.color || card.Colour || card.Color || '',
-          qImg: card.qImg || card.QImage || card.qimage || '',
-          aImg: card.aImg || card.AImage || card.aimage || ''
-        }));
-        // Send POST request to Apps Script
-        await syncTopicWithServer(topic, cardsToSync);
-        // refresh deck after sync
-        await loadDeck();
+
+      try{
+        const text = await file.text();
+        const data = JSON.parse(text);
+
+        cards = Array.isArray(data.cards) ? data.cards : Array.isArray(data) ? data : [];
+        understood = Array.isArray(data.understood) ? data.understood :
+                     Array.isArray(data.seen) ? data.seen : [];
+        mastered = Array.isArray(data.mastered) ? data.mastered : [];
+
+        ensureCards(cards); ensureCards(understood); ensureCards(mastered);
+
         deckFilter = 'remaining';
-topicFilter = null;
-current = 0;
-hideAnswer();
-        alert('Topic synced successfully.');
-      } catch(err){
-        console.error(err);
-        alert('Error syncing topic: ' + (err.message || err));
+        topicFilter = null;
+        randomIds = [];
+        resetPosition();
+
+        await saveState();
+        render();
+        alert('Deck imported and saved.');
+      }catch(err){
+        alert('Import failed: ' + (err.message || err));
+      }finally{
+        e.target.value = '';
       }
-      e.target.value = '';
     });
-    // Helper to send POST request to Apps Script. It expects a global scriptUrl set via config.json or
-    // by editing this file. If scriptUrl is undefined, the user will be alerted.
-    async function syncTopicWithServer(topic, cardsToSync){
-      const url = window.scriptUrl || '';
-      if(!url){ throw new Error('scriptUrl not configured. Please define scriptUrl in config.json.'); }
-      const payload = { action: 'syncTopic', topic: topic, cards: cardsToSync };
-      const res = await fetch(url, {
-        method: 'POST',
-        mode: 'cors',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-      if(!res.ok){
-        const text = await res.text();
-        throw new Error('Server error: ' + text);
+
+    /***********************
+     * Optional remote config / sync
+     ***********************/
+    async function loadConfig(){
+      try{
+        const res = await fetch('config.json', {cache:'no-store'});
+        if(!res.ok) return null;
+        const cfg = await res.json();
+        if(cfg.scriptUrl) window.scriptUrl = cfg.scriptUrl;
+        return cfg;
+      }catch{
+        return null;
       }
-      // Optionally parse server response
     }
 
+    async function loadRemoteSheetIfConfigured(cfg){
+      if(!cfg || !cfg.googleSheetID) return false;
 
-function setDeckFilter(deck, topic=null){
-  deckFilter = deck;
-  topicFilter = topic;
-  current = 0;
-  hideAnswer();
-}
+      try{
+        const sheetName = cfg.sheetName || 'Sheet1';
+        const url = `https://opensheet.elk.sh/${cfg.googleSheetID}/${encodeURIComponent(sheetName)}`;
+        const res = await fetch(url);
+        if(!res.ok) return false;
 
-    /* Initialize app */
-    window.addEventListener('load', async ()=>{
-      initColourOptions();
-      // attach hold events
-      const show = document.getElementById('showBtn');
-      show.addEventListener('mousedown', onDown);
-      show.addEventListener('mousemove', onMove);
-      show.addEventListener('mouseup', onUp);
-      show.addEventListener('mouseleave', onUp);
-      show.addEventListener('touchstart', onDown, { passive:true });
-      show.addEventListener('touchmove', onMove,   { passive:true });
-      show.addEventListener('touchend', onUp);
-      show.addEventListener('touchcancel', onUp);
-      // Add hold/accelerate behaviour to arrow buttons
-      const leftBtn = document.querySelector('.arrow.left');
-      const rightBtn = document.querySelector('.arrow.right');
-      if(leftBtn && rightBtn){
-        addRepeatScroll(leftBtn, prevCard);
-        addRepeatScroll(rightBtn, nextCard);
+        const rows = await res.json();
+        const defaultColour = selectedColour;
+
+        cards = rows.map(row => ({
+          id:uid(),
+          topic:row.Topic || row.topic || '',
+          q:row.Question || row.question || row.q || '',
+          a:row.Answer || row.answer || row.a || '',
+          color:row.Colour || row.Color || row.colour || row.color || defaultColour,
+          qImg:row.QImage || row.qImg || row.qimage || null,
+          aImg:row.AImage || row.aImg || row.aimage || null
+        }));
+
+        understood = [];
+        mastered = [];
+        ensureCards(cards);
+        await saveState();
+        return true;
+      }catch(err){
+        console.warn('Remote sheet load failed:', err);
+        return false;
       }
-      // load decks
-      await loadDeck();
-      updateTopicDrawer();
-      setView(view);
-      render();
+    }
 
-      // Jump input should update immediately when changed
-      const jumpInputEl = document.getElementById('jump');
-      if(jumpInputEl){
-        jumpInputEl.addEventListener('input', (ev) => {
-          const list = activeList();
-          const n = parseInt(ev.target.value, 10);
-          if(!isNaN(n) && n >= 1 && n <= list.length){
-            current = n - 1;
-            hideAnswer();
-          }
-        });
+    async function syncTopicPrompt(){
+      if(!topicFilter){
+        alert('Please select a topic first.');
+        return;
+      }
+
+      const list = allCards().filter(c => c.topic === topicFilter);
+      if(!list.length){
+        alert('No cards found for selected topic. Sync cancelled.');
+        return;
+      }
+
+      if(!confirm(`Sync ${list.length} card(s) for topic "${topicFilter}"? This may replace that topic on the server.`)){
+        return;
+      }
+
+      try{
+        await syncTopicWithServer(topicFilter,list);
+        alert('Topic synced successfully.');
+      }catch(err){
+        alert('Error syncing topic: ' + (err.message || err));
+      }
+    }
+
+    async function syncTopicWithServer(topic,cardsToSync){
+      const url = window.scriptUrl || '';
+      if(!url) throw new Error('scriptUrl not configured. Add it to config.json.');
+
+      const payload = {
+        action:'syncTopic',
+        topic,
+        cards:cardsToSync.map(c => ({
+          topic:c.topic || topic,
+          q:c.q || '',
+          a:c.a || '',
+          color:c.color || '',
+          qImg:c.qImg || '',
+          aImg:c.aImg || ''
+        }))
+      };
+
+      const res = await fetch(url,{
+        method:'POST',
+        mode:'cors',
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(payload)
+      });
+
+      if(!res.ok){
+        throw new Error(await res.text());
+      }
+    }
+
+    /***********************
+     * Drawer/menu/filter/events
+     ***********************/
+    function toggleDrawer(){
+      document.getElementById('drawer').classList.toggle('open');
+    }
+
+    function closeDrawer(){
+      document.getElementById('drawer').classList.remove('open');
+    }
+
+    function toggleMenu(forceClose=false){
+      const m = document.getElementById('menu');
+      if(forceClose) m.style.display = 'none';
+      else m.style.display = m.style.display === 'flex' ? 'none' : 'flex';
+    }
+
+    function addRepeat(btn,action){
+      let timer = null;
+      let delay = 500;
+      function stop(){
+        if(timer) clearTimeout(timer);
+        timer = null;
+      }
+      btn.addEventListener('pointerdown', e => {
+        e.preventDefault();
+        action();
+        delay = 500;
+        const step = () => {
+          timer = setTimeout(() => {
+            action();
+            delay = Math.max(80, delay * .85);
+            step();
+          }, delay);
+        };
+        step();
+      });
+      ['pointerup','pointerleave','pointercancel'].forEach(ev => btn.addEventListener(ev,stop));
+    }
+
+    document.getElementById('drawerToggle').addEventListener('click', e => {
+      e.stopPropagation();
+      toggleDrawer();
+    });
+
+    document.addEventListener('click', e => {
+      const drawer = document.getElementById('drawer');
+      const toggle = document.getElementById('drawerToggle');
+      if(drawer.classList.contains('open') && !drawer.contains(e.target) && e.target !== toggle){
+        closeDrawer();
+      }
+
+      const menu = document.getElementById('menu');
+      const menuBtn = document.getElementById('menuBtn');
+      if(menu.style.display === 'flex' && !menu.contains(e.target) && e.target !== menuBtn){
+        menu.style.display = 'none';
       }
     });
 
+    document.getElementById('keywordInput').addEventListener('input', e => {
+      keywordFilter = e.target.value.trim();
+      current = 0;
+      if(keywordEnabled) render();
+    });
+
+    document.getElementById('keywordToggle').addEventListener('change', e => {
+      keywordEnabled = e.target.checked;
+      current = 0;
+      render();
+    });
+
+    document.getElementById('jump').addEventListener('input', e => {
+      const list = activeList();
+      const n = parseInt(e.target.value,10);
+      if(!isNaN(n) && n >= 1 && n <= list.length){
+        current = n - 1;
+        hideAnswer();
+      }
+    });
+
+    document.addEventListener('keydown', e => {
+      const t = e.target;
+      if(t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return;
+
+      if(e.code === 'Space'){
+        e.preventDefault();
+        showingAnswer ? hideAnswer() : showAnswer();
+      }else if(e.code === 'ArrowRight'){
+        e.preventDefault();
+        nextCard();
+      }else if(e.code === 'ArrowLeft'){
+        e.preventDefault();
+        prevCard();
+      }else if(e.key.toLowerCase() === 'm'){
+        e.preventDefault();
+        markMastered();
+      }else if(e.key.toLowerCase() === 'u'){
+        e.preventDefault();
+        markUnderstood();
+      }else if(e.key.toLowerCase() === 'd'){
+        e.preventDefault();
+        deleteCurrent();
+      }
+    });
+
+    /***********************
+     * Init
+     ***********************/
+    window.addEventListener('load', async () => {
+      initColourOptions();
+
+      const showBtn = document.getElementById('showBtn');
+      showBtn.addEventListener('mousedown',onRevealDown);
+      showBtn.addEventListener('mousemove',onRevealMove);
+      showBtn.addEventListener('mouseup',onRevealUp);
+      showBtn.addEventListener('mouseleave',onRevealUp);
+      showBtn.addEventListener('touchstart',onRevealDown,{passive:true});
+      showBtn.addEventListener('touchmove',onRevealMove,{passive:true});
+      showBtn.addEventListener('touchend',onRevealUp);
+      showBtn.addEventListener('touchcancel',onRevealUp);
+
+      addRepeat(document.querySelector('.arrow.left'),prevCard);
+      addRepeat(document.querySelector('.arrow.right'),nextCard);
+
+      const cfg = await loadConfig();
+      const hasLocal = await loadLocalState();
+
+      if(!hasLocal && cfg){
+        await loadRemoteSheetIfConfigured(cfg);
+      }
+
+      render();
+    });
   </script>
 </body>
 </html>
